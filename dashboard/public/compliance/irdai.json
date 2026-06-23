@@ -1,0 +1,40 @@
+{
+  "_comment": "MOCKUP/DESIGN data. Quoted from the public IRDAI 2026 ICSG (Annexure-III audit checklist) document (see source link), re-verified 2026-06-12. CORRECTION vs prior belief: the PQC item is REAL in the 2026 revision (it was absent in 2023). It is an AUDIT-CHECKLIST item (auditors will ask it), numbered row 110 sequentially — NOT a regulator-branded code 'Control 110'. The PQC wording lives ONLY in the Annexure-III checklist, not the 175-page guideline body.",
+  "framework": "IRDAI",
+  "title": "IRDAI Information & Cybersecurity Guidelines, 2026 — Cryptographic-Asset Inventory",
+  "asOf": "2026-06-12",
+  "verdict": "real-audit-item",
+  "summary": "IRDAI's 2026 cybersecurity guidelines add an audit-checklist question asking insurers whether they maintain a cryptographic-asset inventory for post-quantum readiness — exactly what CryptaMap produces. It is principle-level (no algorithm/key-size/TLS named) and lives in the auditor's checklist, so the obligation is 'be ready to answer yes, with evidence'. CryptaMap is that evidence for the AWS surface.",
+  "documentsHeld": [
+    {
+      "title": "IRDAI Information and Cybersecurity Guidelines, 2026 — Annexure-III Auditor's Report Checklist (full)",
+      "ref": "IRDAI/GA&HR/CIR/MISC/51/4/2026",
+      "date": "2026-04-06",
+      "pages": 90,
+      "url": "https://irdai.gov.in/web/guest/document-detail?documentId=9189223"
+    },
+    {
+      "title": "IRDAI Information and Cybersecurity Guidelines, 2026 — main guideline body (full, 175 pp)",
+      "ref": "IRDAI/GA&HR/CIR/MISC/51/4/2026",
+      "date": "2026-04-06",
+      "pages": 175,
+      "url": "https://irdai.gov.in/web/guest/document-detail?documentId=9189223"
+    }
+  ],
+  "claims": [
+    {
+      "id": "irdai-crypto-inventory-pqc",
+      "headline": "Audit checklist asks: do you maintain a cryptographic-asset inventory for post-quantum readiness?",
+      "quote": "Does the organization maintain an up-to-date inventory of its cryptographic assets to ensure preparedness for transition to post-quantum cryptographic environments?",
+      "where": "Annexure-III Auditor's Report Checklist, Asset Management (ID.AM) category, row 110",
+      "citation": { "sourceFile": "IRDAI-ICSG-2026-AnnexIII-Auditors-Report-Checklist.pdf", "page": 33, "line": 18, "url": "https://irdai.gov.in/web/guest/document-detail?documentId=9189223" },
+      "cryptaMapLevel": "DIRECT",
+      "cryptaMapNote": "CryptaMap is precisely the 'up-to-date inventory of cryptographic assets' this audit item asks for, and it surfaces post-quantum readiness (quantum-safe vs not) per asset. Scope honesty: CryptaMap covers the AWS-managed-service crypto surface; the auditor's question spans the whole organisation. It is also an audit-CHECKLIST item (auditors verify it), not a numbered statutory control."
+    }
+  ],
+  "honestCaveats": [
+    "This is row 110 in the Annexure-III AUDIT CHECKLIST — auditors will ask it. It is NOT a regulator-branded code called 'IRDAI Control 110' (that earlier framing was inaccurate).",
+    "The post-quantum wording appears ONLY in the audit checklist (Annexure-III), not in the 175-page guideline body. The guideline names no specific algorithm, key size, or TLS version — it is a maintain-inventory + PQ-readiness intent.",
+    "CryptaMap covers the AWS-managed-service crypto surface, not the insurer's entire IT estate, and is evidence, not a compliance certification. Verify against the latest IRDAI guideline before audit use."
+  ]
+}

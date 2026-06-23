@@ -1,0 +1,67 @@
+{
+  "_comment": "MOCKUP/DESIGN data for the compliance redesign. Each claim is quoted from the cited public regulator document (see the source link on each claim) and independently re-verified 2026-06-12. This file demonstrates the 'claims live in a dated data layer, not hardcoded TSX' decision. In the real build this is generated/validated from the knowledge store; here it is hand-authored for review.",
+  "framework": "SEBI",
+  "title": "SEBI CSCRF — Cybersecurity & Cyber Resilience Framework",
+  "asOf": "2026-06-12",
+  "verdict": "strong",
+  "summary": "SEBI's CSCRF is the strongest binding-regulator PQC hook in scope: it explicitly directs regulated entities to maintain a cryptographic-asset inventory and prioritize assets for post-quantum migration — which is exactly what CryptaMap produces. Quotes below are taken from the cited public circular (see the source link on each claim), re-verified 2026-06-12; CryptaMap's honest scope limits are stated per claim.",
+  "documentsHeld": [
+    {
+      "title": "Cybersecurity and Cyber Resilience Framework (CSCRF) for SEBI Regulated Entities",
+      "ref": "SEBI/HO/ITD-1/ITD_CSC_EXT/P/CIR/2024/113",
+      "date": "2024-08-20",
+      "pages": 205,
+      "url": "https://www.sebi.gov.in/legal/circulars/aug-2024/cybersecurity-and-cyber-resilience-framework-cscrf-for-sebi-regulated-entities-res-_85964.html"
+    },
+    {
+      "title": "FAQs on CSCRF for SEBI REs and Framework for Adoption of Cloud Services",
+      "ref": "CSCRF FAQ",
+      "date": "2025-06-11",
+      "pages": 23,
+      "url": "https://www.sebi.gov.in/"
+    }
+  ],
+  "claims": [
+    {
+      "id": "sebi-crypto-inventory-pqc",
+      "headline": "Maintain a cryptographic-asset inventory, prioritized for PQC migration",
+      "quote": "REs shall maintain an inventory of cryptographic assets, prioritizing critical assets for Post Quantum Cryptography (PQC) migration, and assess their IT infrastructure capabilities.",
+      "where": "Cybersecurity & Quantum Computing, Box Item 7",
+      "citation": { "sourceFile": "SEBI-CSCRF-2024-113.pdf", "page": 59, "line": 36, "url": "https://www.sebi.gov.in/legal/circulars/aug-2024/cybersecurity-and-cyber-resilience-framework-cscrf-for-sebi-regulated-entities-res-_85964.html" },
+      "cryptaMapLevel": "DIRECT",
+      "cryptaMapNote": "CryptaMap builds exactly this: a cryptographic-asset inventory (CBOM) across the AWS org, flagging which assets are not quantum-safe so they can be prioritized for PQC migration. Scope honesty: CryptaMap covers the AWS-managed-service crypto surface, not the org's entire 'all IT systems'."
+    },
+    {
+      "id": "sebi-pq-risk-assessment",
+      "headline": "Periodic risk assessment must include post-quantum risks",
+      "quote": "Risk assessment (including post-quantum risks) of RE's IT environment shall be done on a periodic basis.",
+      "where": "Cyber Resilience Goals; restated in the ID.RA Risk Assessment standard",
+      "citation": { "sourceFile": "SEBI-CSCRF-2024-113.pdf", "page": 15, "line": 10, "url": "https://www.sebi.gov.in/legal/circulars/aug-2024/cybersecurity-and-cyber-resilience-framework-cscrf-for-sebi-regulated-entities-res-_85964.html" },
+      "cryptaMapLevel": "SUPPORTING",
+      "cryptaMapNote": "CryptaMap does not perform the risk-assessment process itself, but it supplies the cryptographic-asset evidence base that a periodic post-quantum risk assessment consumes. It is an input to this obligation, not its fulfilment."
+    },
+    {
+      "id": "sebi-migration-strategy-qkd",
+      "headline": "Develop can/cannot-migrate strategies; explore PQC and QKD",
+      "quote": "REs shall develop strategies for the protection of assets which can and cannot be migrated to PQC … REs shall explore the feasibility to adopt PQC and technologies like Quantum Key Distribution (QKD).",
+      "where": "Cybersecurity & Quantum Computing, Box Item 7",
+      "citation": { "sourceFile": "SEBI-CSCRF-2024-113.pdf", "page": 59, "line": 39, "url": "https://www.sebi.gov.in/legal/circulars/aug-2024/cybersecurity-and-cyber-resilience-framework-cscrf-for-sebi-regulated-entities-res-_85964.html" },
+      "cryptaMapLevel": "SUPPORTING",
+      "cryptaMapNote": "CryptaMap's classification (quantum-safe vs not, hybrid-PQ TLS detection) informs the can/cannot-migrate triage. The strategy development and QKD feasibility study are organizational decisions outside CryptaMap's scope."
+    },
+    {
+      "id": "sebi-sbom-encryption-used",
+      "headline": "Mandatory SBOM must record 'Encryption used'",
+      "quote": "SBOM shall include (but not limited to) the following: … d. Encryption used …",
+      "where": "GV.SC.S5 — Supply Chain (All REs, Mandatory)",
+      "citation": { "sourceFile": "SEBI-CSCRF-2024-113.pdf", "page": 88, "line": 33, "url": "https://www.sebi.gov.in/legal/circulars/aug-2024/cybersecurity-and-cyber-resilience-framework-cscrf-for-sebi-regulated-entities-res-_85964.html" },
+      "cryptaMapLevel": "SUPPORTING",
+      "cryptaMapNote": "CryptaMap produces a CBOM (cryptography bill of materials), not a full software SBOM. It directly satisfies the SBOM content field 'd. Encryption used' (per-resource algorithm / TLS / cert detail), but NOT the component/dependency/hash fields — those remain a true SBOM tool's job."
+    }
+  ],
+  "honestCaveats": [
+    "CryptaMap is NOT a compliance certification. It produces evidence (a cryptographic inventory) that supports your own compliance determination; the legal obligation and its assessment remain yours.",
+    "Coverage is the AWS-managed-service crypto surface, not the whole organization's 'all IT systems and network resources'.",
+    "Dates and clauses are tracked to the cited primary document as of the 'as of' date above; verify against the latest official circular before audit use."
+  ]
+}

@@ -1,0 +1,267 @@
+{
+  "AWSTemplateFormatVersion": "2010-09-09",
+  "Description": "CryptaMap member-account scanner role. Deployed to every account in your AWS Organization (e.g. o-exampleorgid) via a SERVICE_MANAGED StackSet (AutoDeployment + ManagedExecution.Active=true) targeting your org root (e.g. r-exam). Creates a read-only role with a CUSTOM least-privilege inline policy (NOT the broad AWS-managed ReadOnlyAccess): exactly the per-resource crypto-detail READ actions the CryptaMap scanners require (kms:DescribeKey, acm:DescribeCertificate, iam:GetServerCertificate, elasticloadbalancing:DescribeListeners, etc.). The CryptaMapScannerReadActions inline policy is GENERATED from the single source of truth in cmd/gen-policy/main.go via 'make generate-policy' (CI 'make check-policy' fails on drift) — do not hand-edit its Action array. The CryptaMap orchestrator role in the Audit account assumes this role to run per-(account,region) crypto-asset scans. The trust policy is gated by aws:PrincipalOrgID + ExternalId so only the orchestrator inside this organization can assume it. NOTHING in this template grants write access — the 3 resource-scoped writes (s3:PutObject, dynamodb:PutItem, securityhub:BatchImportFindings) live ONLY on the orchestrator role in the Audit account.",
+  "Outputs": {
+    "ScannerRoleArn": {
+      "Description": "ARN of the CryptaMap scanner role created in this member account.",
+      "Value": {
+        "Fn::GetAtt": [
+          "CryptaMapScannerRole",
+          "Arn"
+        ]
+      }
+    },
+    "ScannerRoleName": {
+      "Description": "Name of the scanner role (matches SCANNER_ROLE_NAME env on the scanner Lambda).",
+      "Value": {
+        "Ref": "ScannerRoleName"
+      }
+    }
+  },
+  "Parameters": {
+    "ExternalId": {
+      "Default": "cryptamap-scanner",
+      "Description": "Additional confused-deputy guard layered on top of aws:PrincipalOrgID. The orchestrator must pass this exact ExternalId on sts:AssumeRole. Override per deployment for stronger isolation.",
+      "NoEcho": true,
+      "Type": "String"
+    },
+    "MaxSessionDurationSeconds": {
+      "Default": 3600,
+      "Description": "Max assume-role session duration. 1h is sufficient for a single per-(account,region) scan worker invocation (Lambda timeout is 15 min).",
+      "MaxValue": 43200,
+      "MinValue": 3600,
+      "Type": "Number"
+    },
+    "OrchestratorRoleArn": {
+      "AllowedPattern": "^arn:aws[a-z-]*:iam::[0-9]{12}:role/.+$",
+      "Default": "arn:aws:iam::123456789012:role/CryptaMapOrchestratorRole",
+      "Description": "Full ARN of the orchestrator role in the delegated-admin Audit/hub account that is the ONLY principal allowed to assume this scanner role. Override with your Audit account's CryptaMapOrchestratorRole ARN (the example default uses placeholder account 123456789012).",
+      "Type": "String"
+    },
+    "OrganizationId": {
+      "AllowedPattern": "^o-[a-z0-9]{10,32}$",
+      "Default": "o-exampleorgid",
+      "Description": "AWS Organizations id. The trust policy requires aws:PrincipalOrgID to equal this value, so only principals belonging to this organization can assume the scanner role (confused-deputy / cross-org guard). Override with your org id (the example default uses placeholder o-exampleorgid).",
+      "Type": "String"
+    },
+    "ScannerRoleName": {
+      "Default": "CryptaMapScannerRole",
+      "Description": "Name of the scanner role created in each member account. Must match SCANNER_ROLE_NAME used by the orchestrator/Lambda (org.RoleARN builds arn:aws:iam::<acct>:role/<this>).",
+      "Type": "String"
+    }
+  },
+  "Resources": {
+    "CryptaMapScannerRole": {
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Statement": [
+            {
+              "Action": "sts:AssumeRole",
+              "Condition": {
+                "StringEquals": {
+                  "aws:PrincipalOrgID": {
+                    "Ref": "OrganizationId"
+                  },
+                  "sts:ExternalId": {
+                    "Ref": "ExternalId"
+                  }
+                }
+              },
+              "Effect": "Allow",
+              "Principal": {
+                "AWS": {
+                  "Ref": "OrchestratorRoleArn"
+                }
+              },
+              "Sid": "AllowOrchestratorAssumeFromOrg"
+            }
+          ],
+          "Version": "2012-10-17"
+        },
+        "Description": "Read-only CryptaMap crypto-asset scanner role. Assumed only by the CryptaMapOrchestratorRole in the Audit account, gated by aws:PrincipalOrgID and a required ExternalId.",
+        "MaxSessionDuration": {
+          "Ref": "MaxSessionDurationSeconds"
+        },
+        "Policies": [
+          {
+            "PolicyDocument": {
+              "Statement": [
+                {
+                  "Action": [
+                    "sts:GetCallerIdentity",
+                    "organizations:ListAccounts",
+                    "ec2:DescribeRegions",
+                    "ec2:DescribeVolumes",
+                    "ec2:DescribeKeyPairs",
+                    "ec2:DescribeClientVpnEndpoints",
+                    "ec2:DescribeVpnConnections",
+                    "s3:ListAllMyBuckets",
+                    "s3:GetBucketEncryption",
+                    "kms:DescribeKey",
+                    "kms:ListKeys",
+                    "kms:ListAliases",
+                    "kms:GetKeyRotationStatus",
+                    "kms:DescribeCustomKeyStores",
+                    "sqs:ListQueues",
+                    "sqs:GetQueueAttributes",
+                    "sns:ListTopics",
+                    "sns:GetTopicAttributes",
+                    "redshift-serverless:ListNamespaces",
+                    "aoss:ListCollections",
+                    "es:ListDomainNames",
+                    "es:DescribeDomain",
+                    "elasticmapreduce:ListSecurityConfigurations",
+                    "elasticmapreduce:DescribeSecurityConfiguration",
+                    "dynamodb:ListTables",
+                    "dynamodb:DescribeTable",
+                    "docdb-elastic:ListClusters",
+                    "docdb-elastic:GetCluster",
+                    "logs:DescribeLogGroups",
+                    "dms:DescribeReplicationInstances",
+                    "backup:ListBackupVaults",
+                    "backup:DescribeBackupVault",
+                    "rds:DescribeDBInstances",
+                    "rds:DescribeDBClusters",
+                    "rds:DescribeDBParameters",
+                    "rds:DescribeDBClusterParameters",
+                    "secretsmanager:ListSecrets",
+                    "elasticache:DescribeReplicationGroups",
+                    "redshift:DescribeClusters",
+                    "quicksight:DescribeKeyRegistration",
+                    "profile:ListDomains",
+                    "profile:GetDomain",
+                    "workspaces-web:ListPortals",
+                    "workspaces-web:GetPortal",
+                    "codebuild:ListProjects",
+                    "codebuild:BatchGetProjects",
+                    "mgn:DescribeReplicationConfigurationTemplates",
+                    "kinesis:ListStreams",
+                    "kinesis:DescribeStreamSummary",
+                    "mq:ListBrokers",
+                    "mq:DescribeBroker",
+                    "lightsail:GetInstances",
+                    "kafka:ListClustersV2",
+                    "states:ListStateMachines",
+                    "states:DescribeStateMachine",
+                    "fsx:DescribeFileSystems",
+                    "emr-serverless:ListApplications",
+                    "firehose:ListDeliveryStreams",
+                    "firehose:DescribeDeliveryStream",
+                    "memorydb:DescribeClusters",
+                    "kendra:ListIndices",
+                    "kendra:DescribeIndex",
+                    "sagemaker:ListDomains",
+                    "sagemaker:DescribeDomain",
+                    "dax:DescribeClusters",
+                    "events:ListEventBuses",
+                    "events:DescribeEventBus",
+                    "glue:GetDataCatalogEncryptionSettings",
+                    "storagegateway:ListGateways",
+                    "storagegateway:ListFileShares",
+                    "storagegateway:DescribeNFSFileShares",
+                    "storagegateway:DescribeSMBFileShares",
+                    "cassandra:Select",
+                    "workspaces:DescribeWorkspaces",
+                    "qldb:ListLedgers",
+                    "qldb:DescribeLedger",
+                    "ssm:DescribeParameters",
+                    "ssm:DescribeInstanceInformation",
+                    "bedrock:ListAgents",
+                    "bedrock:GetAgent",
+                    "bedrock:ListCustomModels",
+                    "bedrock:GetCustomModel",
+                    "bedrock:ListGuardrails",
+                    "bedrock:GetGuardrail",
+                    "bedrock:ListKnowledgeBases",
+                    "timestream:ListDatabases",
+                    "timestream:DescribeEndpoints",
+                    "kinesisanalytics:ListApplications",
+                    "kinesisanalytics:DescribeApplication",
+                    "athena:ListWorkGroups",
+                    "athena:GetWorkGroup",
+                    "xray:GetEncryptionConfig",
+                    "elasticfilesystem:DescribeFileSystems",
+                    "cognito-idp:ListUserPools",
+                    "payment-cryptography:ListKeys",
+                    "payment-cryptography:GetKey",
+                    "cloudhsm:DescribeClusters",
+                    "cloudtrail:LookupEvents",
+                    "cloudfront:ListDistributions",
+                    "cloudfront:ListPublicKeys",
+                    "iam:ListServerCertificates",
+                    "iam:GetServerCertificate",
+                    "ses:ListEmailIdentities",
+                    "ses:GetEmailIdentity",
+                    "acm:ListCertificates",
+                    "acm:DescribeCertificate",
+                    "appstream:DescribeDirectoryConfigs",
+                    "iot:ListCertificates",
+                    "iot:DescribeCertificate",
+                    "acm-pca:ListCertificateAuthorities",
+                    "signer:ListSigningProfiles",
+                    "signer:GetSigningProfile",
+                    "rolesanywhere:ListTrustAnchors",
+                    "eks:ListClusters",
+                    "elasticloadbalancing:DescribeLoadBalancers",
+                    "elasticloadbalancing:DescribeListeners",
+                    "elasticloadbalancing:DescribeSSLPolicies",
+                    "vpc-lattice:ListServices",
+                    "vpc-lattice:GetService",
+                    "vpc-lattice:ListListeners",
+                    "iot:DescribeDomainConfiguration",
+                    "iot:ListDomainConfigurations",
+                    "iot:ListThings",
+                    "apigateway:GET",
+                    "transfer:ListServers",
+                    "transfer:DescribeServer",
+                    "transfer:DescribeSecurityPolicy",
+                    "directconnect:DescribeConnections",
+                    "lambda:ListFunctions",
+                    "appsync:ListGraphqlApis",
+                    "ds:DescribeDirectories",
+                    "ds:DescribeLDAPSSettings",
+                    "ecs:ListClusters",
+                    "appmesh:ListMeshes",
+                    "appmesh:ListVirtualNodes",
+                    "appmesh:DescribeVirtualNode",
+                    "globalaccelerator:ListAccelerators",
+                    "globalaccelerator:ListListeners",
+                    "ecr:DescribeRepositories",
+                    "ecr:DescribeImages"
+                  ],
+                  "Effect": "Allow",
+                  "Resource": "*",
+                  "Sid": "CryptaMapScannerReads"
+                }
+              ],
+              "Version": "2012-10-17"
+            },
+            "PolicyName": "CryptaMapScannerReadActions"
+          }
+        ],
+        "RoleName": {
+          "Ref": "ScannerRoleName"
+        },
+        "Tags": [
+          {
+            "Key": "Project",
+            "Value": "CryptaMap"
+          },
+          {
+            "Key": "Owner",
+            "Value": "security"
+          },
+          {
+            "Key": "CostCenter",
+            "Value": "compliance"
+          },
+          {
+            "Key": "ManagedBy",
+            "Value": "CryptaMapScannerRoleStackSet"
+          }
+        ]
+      },
+      "Type": "AWS::IAM::Role"
+    }
+  }
+}

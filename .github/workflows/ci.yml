@@ -1,0 +1,205 @@
+name: CI
+
+# Continuous integration for CryptaMap.
+#
+# This repository root IS the Go module root (go.mod lives here), with the
+# Cloudscape dashboard under ./dashboard and the CDK app under ./cdk.
+#
+# The Go steps mirror the Makefile GOPACKAGES list (./internal/... ./pkg/...
+# ./cmd/...) and the local verification command used throughout development:
+#   go build ./... && go vet ./internal/... ./pkg/... ./cmd/... && go test ./internal/... ./pkg/...
+#
+# NOTE on `go build ./...`: the AWS CDK pulls a vendored init-template file
+# named "%name%.template.go" into cdk/node_modules. That file is not valid Go
+# and "go build ./..." would normally choke on it. We therefore install npm
+# dependencies (which create node_modules) only in the dashboard/cdk jobs, and
+# the Go job runs WITHOUT installing cdk node_modules, so the offending file is
+# never present when `go build ./...` walks the tree. The vet/test steps are
+# scoped to the explicit GOPACKAGES globs and are unaffected regardless.
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: ["**"]
+  workflow_dispatch:
+
+# Supply-chain hardening: third-party actions are pinned to an immutable commit
+# SHA (a mutable tag like @v4 can be force-moved to malicious code). The actions
+# used here are all first-party GitHub (actions/*); per policy these may run on a
+# major tag, but we still pin them to SHA for defense-in-depth and annotate the
+# moving tag in a trailing comment for readability.
+permissions:
+  contents: read
+
+jobs:
+  secret-scan:
+    name: Secret / real-data scan
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      # Fail the build if any tracked file contains a real AWS account ID (in
+      # ARN/accountId context), a PEM private key, a developer-machine absolute
+      # path, or a known-real bucket name. This is the regression guard that keeps
+      # the public sample free of the data the 2026-06 cleanup removed. Demo data
+      # is synthetic (cmd/gen-dashboard-mock); synthetic/example IDs are allowlisted.
+      - name: scan for real-account data / secrets
+        run: bash scripts/scan-secrets.sh
+
+  go:
+    name: Go build / vet / test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Set up Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # The Go job intentionally does NOT run `npm ci` in cdk/, so the
+      # cdk/node_modules "%name%.template.go" init-template file is absent and
+      # `go build ./...` walks a clean tree.
+      - name: go build ./...
+        run: go build ./...
+
+      - name: go vet (GOPACKAGES)
+        run: go vet ./internal/... ./pkg/... ./cmd/...
+
+      - name: go test (GOPACKAGES) with coverage
+        run: go test ./internal/... ./pkg/... -cover
+
+      # Single-source-of-truth guard: the dashboard TS types are generated from
+      # the Go wire structs by `go run ./cmd/gen-ts`. Regenerate and fail if the
+      # committed generated.ts is stale, so Go model changes can never silently
+      # drift from the dashboard types. Offline; no new dependencies.
+      - name: generated TS types are up to date (no drift)
+        run: |
+          go run ./cmd/gen-ts
+          git diff --exit-code -- dashboard/src/types/generated.ts \
+            || { echo "::error::dashboard/src/types/generated.ts is stale. Run 'make generate-types' and commit."; exit 1; }
+
+      # Single-source-of-truth guard: the embedded PQC knowledge JSON
+      # (internal/pqc/data/pqc-knowledge.json) is projected from the Go literals.
+      # Fail if the committed embed is stale, so a matrix/primitives edit can never
+      # silently diverge from the shipped knowledge. Offline; no new dependencies.
+      - name: embedded PQC knowledge is up to date (no drift)
+        run: go run ./cmd/gen-knowledge -check
+
+      # Single-source-of-truth guard: the scanner IAM least-privilege action set
+      # (cdk/policy/scanner-actions.json + the inline policy in the StackSet
+      # template cdk/templates/scanner-role-template.json) is projected from the
+      # Go literal list in cmd/gen-policy. Fail if either committed artifact is
+      # stale, so a scanner's required IAM action can never silently drift from
+      # the code. Offline; no new dependencies.
+      - name: scanner IAM policy artifacts are up to date (no drift)
+        run: go run ./cmd/gen-policy -check
+
+      # The dashboard demo data (dashboard/public/mock/*.json) must match the
+      # synthetic generator output — fail if it was hand-edited or regenerated from
+      # a real scan. Demo data must stay synthetic so real account IDs / bucket
+      # names can never enter the committed artifacts.
+      - name: dashboard demo data is synthetic + up to date (no drift)
+        run: go run ./cmd/gen-dashboard-mock -check
+
+      # The honesty-contract invariant tests, the end-to-end output-pipeline
+      # tests, and the mock-coverage test are all plain _test.go files in
+      # ./internal/scanner, ./internal/output, and ./internal/mock (and the
+      # per-service invariant/fuzz seed-corpus tests under ./internal/services,
+      # which ./internal/... recurses into). They therefore already run as part
+      # of the broad "go test (GOPACKAGES) with coverage" step above. The
+      # per-shard memory/time load test (TestLoadScaling) is gated behind
+      # CRYPTAMAP_LOADTEST=1, which CI does NOT set, so it stays excluded from
+      # the normal run. None of the tests below are behind a build tag.
+      #
+      # This explicit step re-runs ONLY those tests, selected by name, so that a
+      # honesty-contract or pipeline regression is clearly labelled in the CI
+      # output instead of being buried inside the broad test step. We invoke
+      # `go test` once per package because a single command that mixes package
+      # paths with multiple `-run` flags does not apply each filter to its
+      # adjacent package (Go applies the last `-run` to all listed packages).
+      - name: honesty invariants + e2e pipeline (named tests)
+        run: |
+          go test ./internal/scanner/ -run 'Invariant|Honesty'
+          go test ./internal/output/  -run 'E2E|Pipeline'
+          go test ./internal/mock/    -run 'Coverage'
+
+      # The CycloneDX 1.7 CBOM schema-validation tests self-skip when the schema
+      # bundle is absent (so they never fail in an offline tree without it). The
+      # bundle IS committed under testdata/schemas/, so re-run them here with
+      # CRYPTAMAP_REQUIRE_SCHEMA=1, which turns that skip into a hard failure — CI
+      # can never go green while silently NOT validating CBOM schema conformance
+      # (a broken checkout/vendor of testdata/schemas/ now fails the build).
+      - name: CBOM is CycloneDX 1.7 schema-valid (no silent skip)
+        env:
+          CRYPTAMAP_REQUIRE_SCHEMA: "1"
+        run: go test ./internal/output/ -run 'CycloneDXSchemaValidation' -v
+
+      # Two Go native fuzz targets back-stop the security-critical parsers/mappers:
+      # FuzzKMSSpecPosture (KMS key-spec -> posture mapper) and FuzzParseCertPEM
+      # (X.509 PEM certificate parser). Run each briefly so malformed input that
+      # panics or violates an invariant fails CI. The seed corpus also executes
+      # in the broad test step; this step exercises NEW inputs beyond the seeds.
+      - name: fuzz security-critical parsers (brief)
+        run: |
+          go test -run=XXX -fuzz=FuzzKMSSpecPosture -fuzztime=20s ./internal/services/keymgmt/
+          go test -run=XXX -fuzz=FuzzParseCertPEM   -fuzztime=20s ./internal/services/certmgmt/
+
+      # lambda.go is gated by `//go:build lambda`, so the untagged build above
+      # never compiles the org fan-out handler. Build it explicitly here so the
+      # Lambda entry point is covered by CI.
+      - name: go build -tags lambda (org fan-out handler)
+        run: go build -tags lambda ./cmd/cryptamap/
+
+  dashboard:
+    name: Dashboard build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: dashboard
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Set up Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: dashboard/package-lock.json
+
+      - name: npm ci
+        run: npm ci
+
+      - name: npm run build
+        run: npm run build
+
+  cdk:
+    name: CDK build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: cdk
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Set up Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: cdk/package-lock.json
+
+      - name: npm ci
+        run: npm ci
+
+      # `npm run build` is `tsc` (TypeScript compile). It does not touch the
+      # vendored cdk/node_modules "%name%.template.go" file, which only affects
+      # `go build ./...` (handled in the Go job, which omits cdk node_modules).
+      - name: npm run build
+        run: npm run build

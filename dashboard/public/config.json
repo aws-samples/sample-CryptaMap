@@ -1,0 +1,6 @@
+{
+  "apiBase": "",
+  "bucket": "<RESULTS_BUCKET_NAME>",
+  "mockMode": true,
+  "roadmapPath": "/mock/roadmap.json"
+}

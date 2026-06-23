@@ -1,0 +1,26 @@
+{
+  "serviceMatrix": {
+    "acmpca": {
+      "sourceUrl": "https://docs.aws.amazon.com/privateca/latest/APIReference/API_CertificateAuthorityConfiguration.html"
+    }
+  },
+  "cipherProfiles": {
+    "kmsKeySpec/RSA_2048": {
+      "sourceUrl": "https://docs.aws.amazon.com/kms/latest/developerguide/MOVED-asymmetric-key-specs.html",
+      "enums": ["RSA_2048", "RSA-2048", "bits:2048"]
+    },
+    "kmsKeySpec/ML_DSA_87": {
+      "sourceUrl": "https://docs.aws.amazon.com/kms/latest/developerguide/mldsa.html",
+      "enums": ["ML_DSA_87", "ML-DSA-87", "bits:4896"]
+    },
+    "kmsKeySpec/ML_DSA_99": {
+      "sourceUrl": "https://docs.aws.amazon.com/kms/latest/developerguide/mldsa.html",
+      "enums": ["ML_DSA_99", "ML-DSA-99"]
+    }
+  },
+  "scannerDocFacts": {
+    "datarest/dynamodb/at-rest-aes256": {
+      "sourceUrl": "https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/encryption.howitworks.html"
+    }
+  }
+}

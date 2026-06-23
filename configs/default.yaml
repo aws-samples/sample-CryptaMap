@@ -1,0 +1,89 @@
+version: "1.0"
+
+scan:
+  mode: "on-demand"
+  regions: []
+  accounts: []
+  org_scanning:
+    enabled: false
+    role_name: "CryptaMapScannerRole"
+    management_account_id: ""
+    external_id: ""
+  concurrency:
+    max_goroutines: 50
+  rate_limiting:
+    max_retries: 5
+    base_delay_ms: 100
+    max_delay_ms: 30000
+    jitter: true
+  # NOTE: active TLS probing is intentionally NOT a scan option. CryptaMap's
+  # evidence model is read-only: control-plane config inspection + passive
+  # CloudTrail observation (tlsDetails.keyExchange). Active TLS handshakes against
+  # endpoints are out of scope for the org scan;
+  # the dormant prober in internal/probing is not wired in.
+
+output:
+  s3:
+    enabled: true
+    bucket_name: "cryptamap-results-${AWS_ACCOUNT_ID}"
+    prefix: "scans/"
+  dynamodb:
+    enabled: true
+    table_name: "CryptaMapScans"
+    retention_scans: 30
+  security_hub:
+    # product_arn is stamped into the locally-written ASFF JSON findings; there
+    # is no live BatchImportFindings push path.
+    product_arn: "arn:aws:securityhub:${REGION}:${ACCOUNT}:product/${ACCOUNT}/default"
+  formats:
+    cyclonedx: true
+    pqcc_excel: true
+    asff: true
+    pdf: false
+    html: true
+  local_dir: "./dist/scan-output"
+
+risk:
+  mosca:
+    defaults:
+      data_shelf_life_years: 7
+      migration_time_years: 2
+      threat_timeline_years: 3
+    overrides: {}
+  severity_mapping:
+    no_encryption: "CRITICAL"
+    legacy_tls: "HIGH"
+    non_pqc_classical: "MEDIUM"
+    pqc_ready: "INFORMATIONAL"
+
+compliance:
+  frameworks:
+    - "SEBI_CSCRF"
+    - "RBI_BANK_IN"
+    - "IRDAI_ICSG"
+    - "CISA_M2302"
+    - "MITRE_PQCC"
+    - "CNSA_2_0"
+    - "EU_NIS2_DORA"
+    - "CANADA_PQC"
+    - "EUROPOL_QSFF"
+
+mock:
+  enabled: false
+  scale:
+    accounts: 3
+    regions_per_account: 4
+    resources_per_service: 20
+
+dashboard:
+  auth:
+    cognito_enabled: true
+    user_pool_id: ""
+    client_id: ""
+
+owner:
+  name: ""
+  email: ""
+  phone: ""
+  org_unit: ""
+  vendor_poc: "AWS Support"

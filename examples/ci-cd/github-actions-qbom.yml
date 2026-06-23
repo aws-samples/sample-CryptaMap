@@ -1,0 +1,127 @@
+# Continuous QBOM — GitHub Actions reference pipeline.
+#
+# A CUSTOMER-ADAPTABLE EXAMPLE (not this repository's own CI). It implements the
+# CERT-In CIWP "continuous QBOM" pattern read literally: on every push / PR /
+# schedule, assume a READ-ONLY AWS role via OIDC, run CryptaMap, emit a SIGNED
+# DATED CBOM, convert to ASFF, and FAIL the build if the run introduces a NEW
+# critical post-quantum finding versus a committed baseline.
+#
+# To use this in your own repo:
+#   1. Copy this file to .github/workflows/qbom.yml in your application repo.
+#   2. Create a read-only IAM role trusting GitHub's OIDC provider and put its
+#      ARN in the `AWS_ROLE_ARN` repo variable (vars.AWS_ROLE_ARN). The role only
+#      needs Describe/List/Get + (optionally) securityhub:BatchImportFindings.
+#   3. Seed the baseline once (see examples/ci-cd/README.md) and commit it to
+#      examples/ci-cd/baseline.asff.json.
+
+name: Continuous QBOM
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: ["**"]
+  schedule:
+    # Daily re-scan at 01:30 UTC so drift is caught even without a code change.
+    - cron: "30 1 * * *"
+  workflow_dispatch:
+
+# OIDC requires id-token: write; everything else stays read-only.
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  CRYPTAMAP_REGIONS: ap-south-1
+  CRYPTAMAP_OUTPUT_DIR: ./dist/qbom-output
+  CRYPTAMAP_BASELINE: ./examples/ci-cd/baseline.asff.json
+
+jobs:
+  qbom:
+    name: Scan, sign, diff
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Set up Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # Build the CLI from source so the QBOM is produced by the exact revision
+      # under test. Distributors may instead download a pinned release binary.
+      - name: Build cryptamap CLI
+        run: make build-cli
+
+      # Step 1 — assume a READ-ONLY role via GitHub OIDC. No long-lived keys.
+      - name: Configure AWS credentials (read-only, OIDC)
+        uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a # v4
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          role-session-name: cryptamap-qbom-${{ github.run_id }}
+          aws-region: ap-south-1
+
+      - name: Confirm caller identity (read-only)
+        run: aws sts get-caller-identity
+
+      # Step 2 + 3 — run the read-only scan → dated CBOM + ASFF for this run.
+      # The scanner uses only Describe/List/Get APIs; it never mutates resources.
+      - name: Run CryptaMap scan (read-only)
+        run: |
+          ./dist/cryptamap \
+            --regions "${CRYPTAMAP_REGIONS}" \
+            --output-dir "${CRYPTAMAP_OUTPUT_DIR}" \
+            --verbose
+
+      - name: Locate dated artefacts
+        id: artefacts
+        run: |
+          cbom="$(ls -1t "${CRYPTAMAP_OUTPUT_DIR}"/*.cbom.json | head -n1)"
+          asff="$(ls -1t "${CRYPTAMAP_OUTPUT_DIR}"/*.asff.json | head -n1)"
+          echo "cbom=${cbom}" >> "${GITHUB_OUTPUT}"
+          echo "asff=${asff}" >> "${GITHUB_OUTPUT}"
+          echo "Dated CBOM: ${cbom}"
+          echo "Dated ASFF: ${asff}"
+
+      # Step 4 — SIGN the dated CBOM with cosign keyless (Sigstore, OIDC). The
+      # signature (.sig) + certificate (.pem) are uploaded alongside the CBOM so
+      # auditors can verify the dated bill of materials. See README.md for the
+      # cosign verify command and the minisign alternative for air-gapped envs.
+      - name: Install cosign
+        uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac # v3
+
+      - name: Sign the dated CBOM (cosign keyless)
+        env:
+          COSIGN_EXPERIMENTAL: "1"
+        run: |
+          cosign sign-blob --yes \
+            --output-signature "${{ steps.artefacts.outputs.cbom }}.sig" \
+            --output-certificate "${{ steps.artefacts.outputs.cbom }}.pem" \
+            "${{ steps.artefacts.outputs.cbom }}"
+
+      # Step 5 — FAIL the build on a NEW critical finding (diff vs committed
+      # baseline). The helper keys on the STABLE (account|ARN|title) tuple, so a
+      # pre-existing accepted critical does not re-fail the build, but a brand-new
+      # one does. Re-seed the baseline to accept a finding (see README.md).
+      - name: Gate on new critical findings
+        run: |
+          go run ./examples/ci-cd/baseline-diff.go \
+            -baseline "${CRYPTAMAP_BASELINE}" \
+            -current "${{ steps.artefacts.outputs.asff }}"
+
+      # Always publish the signed, dated QBOM so each run has an immutable,
+      # downloadable bill of materials — even when the gate fails.
+      - name: Upload signed dated QBOM
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: qbom-${{ github.run_id }}
+          path: |
+            ${{ env.CRYPTAMAP_OUTPUT_DIR }}/*.cbom.json
+            ${{ env.CRYPTAMAP_OUTPUT_DIR }}/*.cbom.json.sig
+            ${{ env.CRYPTAMAP_OUTPUT_DIR }}/*.cbom.json.pem
+            ${{ env.CRYPTAMAP_OUTPUT_DIR }}/*.asff.json
+            ${{ env.CRYPTAMAP_OUTPUT_DIR }}/*.roadmap.*
+          if-no-files-found: warn

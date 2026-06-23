@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>CryptaMap — dashboard not staged</title>
+  </head>
+  <body>
+    <!--
+      PLACEHOLDER BUNDLE — committed so a plain `go build ./cmd/cryptamap`
+      compiles (the //go:embed all:webdist in web_embed.go needs SOMETHING to
+      embed). The real Single-Page-App lives in dashboard/dist, which is OUTSIDE
+      cmd/cryptamap so go:embed cannot reach it across directories. `make
+      build-serve` builds the dashboard and stages dashboard/dist/* into this
+      directory before `go build`, replacing this file with the real bundle.
+
+      If you are seeing this page in a browser, the binary was built WITHOUT
+      staging the dashboard. Run `make build-serve` (or `make build-dashboard`
+      then copy dashboard/dist into cmd/cryptamap/webdist) and rebuild.
+    -->
+    <h1>CryptaMap dashboard not staged</h1>
+    <p>
+      This is a placeholder build. Run <code>make build-serve</code> to stage the
+      React dashboard (dashboard/dist) into the binary before building.
+    </p>
+  </body>
+</html>

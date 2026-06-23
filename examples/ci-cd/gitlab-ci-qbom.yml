@@ -1,0 +1,91 @@
+# Continuous QBOM — GitLab CI reference pipeline.
+#
+# A CUSTOMER-ADAPTABLE EXAMPLE (not this repository's own CI). GitLab CI
+# equivalent of github-actions-qbom.yml: assume a READ-ONLY AWS role via GitLab
+# OIDC ID tokens, run CryptaMap, emit a SIGNED DATED CBOM, convert to ASFF, and
+# FAIL the build if the run introduces a NEW critical post-quantum finding
+# versus a committed baseline.
+#
+# To use this in your own repo, either commit it as .gitlab-ci.yml or `include:`
+# it from your pipeline, then set these CI/CD variables (Settings → CI/CD):
+#   AWS_ROLE_ARN   read-only IAM role trusting GitLab's OIDC provider
+#                  (sts:AssumeRoleWithWebIdentity); only needs Describe/List/Get
+#                  + (optionally) securityhub:BatchImportFindings.
+# Seed examples/ci-cd/baseline.asff.json once (see examples/ci-cd/README.md).
+
+stages:
+  - qbom
+
+variables:
+  CRYPTAMAP_REGIONS: "ap-south-1"
+  CRYPTAMAP_OUTPUT_DIR: "./dist/qbom-output"
+  CRYPTAMAP_BASELINE: "./examples/ci-cd/baseline.asff.json"
+  AWS_DEFAULT_REGION: "ap-south-1"
+
+continuous-qbom:
+  stage: qbom
+  image: golang:1.26
+  # GitLab issues a short-lived OIDC JWT bound to this job; AWS trusts it via the
+  # role's web-identity trust policy. No long-lived AWS keys live in CI.
+  id_tokens:
+    AWS_OIDC_TOKEN:
+      aud: https://gitlab.com
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "push"
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_PIPELINE_SOURCE == "schedule"
+    - if: $CI_PIPELINE_SOURCE == "web"
+  before_script:
+    # awscli + jq for the read-only assume-role and (fallback) critical diff.
+    - apt-get update -qq && apt-get install -y -qq awscli jq
+    # Step 1 — assume the READ-ONLY role via OIDC web identity. No mutations.
+    - |
+      CREDS="$(aws sts assume-role-with-web-identity \
+        --role-arn "${AWS_ROLE_ARN}" \
+        --role-session-name "cryptamap-qbom-${CI_PIPELINE_ID}" \
+        --web-identity-token "${AWS_OIDC_TOKEN}" \
+        --duration-seconds 3600 \
+        --query 'Credentials.[AccessKeyId,SecretAccessKey,SessionToken]' \
+        --output text)"
+      export AWS_ACCESS_KEY_ID="$(echo "${CREDS}" | cut -f1)"
+      export AWS_SECRET_ACCESS_KEY="$(echo "${CREDS}" | cut -f2)"
+      export AWS_SESSION_TOKEN="$(echo "${CREDS}" | cut -f3)"
+    - aws sts get-caller-identity
+  script:
+    # Build the CLI from source so the QBOM reflects the revision under test.
+    - make build-cli
+    # Step 2 + 3 — read-only scan → dated CBOM + ASFF for this run.
+    - |
+      ./dist/cryptamap \
+        --regions "${CRYPTAMAP_REGIONS}" \
+        --output-dir "${CRYPTAMAP_OUTPUT_DIR}" \
+        --verbose
+    - CBOM="$(ls -1t "${CRYPTAMAP_OUTPUT_DIR}"/*.cbom.json | head -n1)"
+    - ASFF="$(ls -1t "${CRYPTAMAP_OUTPUT_DIR}"/*.asff.json | head -n1)"
+    - echo "Dated CBOM ${CBOM}"
+    - echo "Dated ASFF ${ASFF}"
+    # Step 4 — SIGN the dated CBOM with cosign keyless (Sigstore, OIDC). For
+    # air-gapped environments, swap in minisign — see examples/ci-cd/README.md.
+    - |
+      if command -v cosign >/dev/null 2>&1; then
+        COSIGN_EXPERIMENTAL=1 cosign sign-blob --yes \
+          --output-signature "${CBOM}.sig" \
+          --output-certificate "${CBOM}.pem" \
+          "${CBOM}"
+      else
+        echo "[qbom] cosign not installed in image; install it or use minisign — see README.md"
+      fi
+    # Step 5 — FAIL the build on a NEW critical (diff vs committed baseline).
+    # The Go helper keys on the STABLE (account|ARN|title) tuple so accepted
+    # criticals do not re-fail the build; a brand-new one does.
+    - |
+      go run ./examples/ci-cd/baseline-diff.go \
+        -baseline "${CRYPTAMAP_BASELINE}" \
+        -current "${ASFF}"
+  artifacts:
+    # Publish the signed, dated QBOM even when the gate fails, so every pipeline
+    # run leaves an immutable, downloadable bill of materials.
+    when: always
+    expire_in: 90 days
+    paths:
+      - dist/qbom-output/

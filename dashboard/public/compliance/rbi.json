@@ -1,0 +1,62 @@
+{
+  "_comment": "MOCKUP/DESIGN data. Quotes taken from the public RBI documents (see each source link), re-verified 2026-06-12. RBI is the HONEST TWO-LAYER case: a binding generic crypto rule today + a forward-looking study committee. There is NO binding RBI post-quantum mandate yet — this page must not imply one.",
+  "framework": "RBI",
+  "title": "RBI — Cryptographic Controls (binding today) & Quantum Readiness (Q-SAFE, forward-looking)",
+  "asOf": "2026-06-12",
+  "verdict": "mixed",
+  "summary": "RBI has NO post-quantum mandate today. What is binding now is a generic 'use strong cryptography' rule, which CryptaMap evidences. RBI's quantum work is a study committee (Q-SAFE) whose terms of reference describe a CBOM — promising, but it is a study body with no obligation yet. This page separates the two layers so neither is overstated.",
+  "documentsHeld": [
+    {
+      "title": "Master Direction on IT Governance, Risk, Controls and Assurance Practices",
+      "ref": "RBI/2023-24/107",
+      "date": "2023-11-07",
+      "url": "https://www.rbi.org.in/Scripts/BS_ViewMasDirections.aspx"
+    },
+    {
+      "title": "RBI sets up Committee on Quantum-Safe Cryptography (Q-SAFE) — Press Release",
+      "ref": "PR 2026-2027/325",
+      "date": "2026-05-25",
+      "url": "https://www.rbi.org.in/Scripts/BS_PressReleaseDisplay.aspx?prid=62803"
+    },
+    {
+      "title": ".bank.in exclusive domain migration directive (anti-phishing; NON-PQC)",
+      "ref": "RBI/2025-26/28",
+      "date": "2025-04-22",
+      "url": "https://www.rbi.org.in/Scripts/NotificationUser.aspx?Id=12837"
+    }
+  ],
+  "claims": [
+    {
+      "id": "rbi-crypto-controls-binding",
+      "headline": "BINDING TODAY — cryptographic controls must be strong (generic, not PQC-specific)",
+      "quote": "The key length, algorithms, cipher suites and applicable protocols used in transmission channels, processing of data and authentication purpose shall be strong …",
+      "where": "Master Direction RBI/2023-24/107, §16 Cryptographic controls (effective 1 Apr 2024)",
+      "citation": { "sourceFile": "RBI-IT-Governance-MD-2023-24-107 (rendered HTML — no PDF pagination)", "section": "§16 Cryptographic controls", "url": "https://www.rbi.org.in/Scripts/BS_ViewMasDirections.aspx" },
+      "cryptaMapLevel": "DIRECT",
+      "cryptaMapNote": "This is binding on RBI-regulated entities today. CryptaMap directly evidences it: it inventories key lengths, algorithms, cipher suites and TLS versions across the AWS org and flags deprecated/weak ones. NOTE: this clause says nothing about quantum/PQC — it is general crypto hygiene, and that is exactly how this page presents it."
+    },
+    {
+      "id": "rbi-qsafe-cbom-forward",
+      "headline": "FORWARD-LOOKING — Q-SAFE committee will study a CBOM (study body, NO obligation yet)",
+      "quote": "Evaluate the financial sector's cryptographic inventory through a Cryptography Bill of Materials (CBOM), assess crypto agility and identify the critical systems and processes most vulnerable to such threats.",
+      "where": "Q-SAFE Committee Terms of Reference, RBI Press Release PR 2026-2027/325 (25 May 2026)",
+      "citation": { "sourceFile": "RBI-QSAFE-expert-committee-PR-2026-325 (rendered HTML — no PDF pagination)", "section": "Q-SAFE Committee — Terms of Reference", "url": "https://www.rbi.org.in/Scripts/BS_PressReleaseDisplay.aspx?prid=62803" },
+      "cryptaMapLevel": "SUPPORTING",
+      "cryptaMapNote": "This describes CryptaMap's exact output (a CBOM + crypto-agility assessment) — but it is the mandate of a STUDY COMMITTEE whose report is pending. It creates NO obligation on regulated entities today. Treat as a strong signal of direction, not a current requirement."
+    },
+    {
+      "id": "rbi-bankin-noncrypto",
+      "headline": "OTHER (non-PQC) — .bank.in domain migration is an anti-phishing measure",
+      "quote": "… banks shall migrate to the '.bank.in' domain … not later than October 31, 2025.",
+      "where": "RBI/2025-26/28 (22 Apr 2025)",
+      "citation": { "sourceFile": "RBI-bankin-domain-2025-26-28 (rendered HTML — no PDF pagination)", "section": "Notification Id=12837", "url": "https://www.rbi.org.in/Scripts/NotificationUser.aspx?Id=12837" },
+      "cryptaMapLevel": "OUT-OF-SCOPE",
+      "cryptaMapNote": "Listed only to prevent confusion: this is a domain-trust / anti-phishing deadline with ZERO cryptographic or post-quantum content. CryptaMap does not address it and it is not part of any PQC narrative."
+    }
+  ],
+  "honestCaveats": [
+    "RBI has NOT issued a post-quantum mandate. Do not read this page as 'RBI requires PQC' — it does not (as of the verification date).",
+    "The only binding crypto rule here is generic ('use strong cryptography'); the quantum/CBOM language is a study committee's terms of reference, not a regulation.",
+    "CryptaMap is evidence, not a compliance certification. Verify against the latest RBI circular before audit use."
+  ]
+}

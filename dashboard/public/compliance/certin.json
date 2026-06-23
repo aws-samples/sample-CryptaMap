@@ -1,0 +1,56 @@
+{
+  "_comment": "MOCKUP/DESIGN data. Quotes taken from two public CERT-In primaries (see source links), re-verified 2026-06-12. This is the NATIONAL UMBRELLA view: CERT-In literally names 'CBOM' and 'automated cloud-native cryptographic discovery' — CryptaMap's exact category. HONESTY: these are advisory/recommended (whitepaper + technical guidelines), NOT an enforced sectoral mandate; that tier is disclosed.",
+  "framework": "CERTIN",
+  "title": "CERT-In — Quantum Cyber Readiness & the CBOM/QBOM (national framing)",
+  "asOf": "2026-06-12",
+  "verdict": "advisory-strong-framing",
+  "summary": "CERT-In (India's national CERT) is the umbrella over the sector regulators. Its quantum-readiness whitepaper and its SBOM/QBOM/CBOM technical guidelines name a 'Cryptographic Bill of Materials' and 'automated cloud-native cryptographic discovery' as the foundation of PQC migration — i.e. they describe CryptaMap's category by name. These are advisory/recommended documents (not an enforced rule), which is stated up front; their value is as the authoritative national description of what a tool like CryptaMap should produce.",
+  "documentsHeld": [
+    {
+      "title": "Transitioning to Quantum Cyber Readiness (CERT-In white paper, with SISA)",
+      "ref": "CIWP-2025-0002",
+      "date": "2025",
+      "url": "https://www.cert-in.org.in/s2cMainServlet?pageid=WHTPVIEW01"
+    },
+    {
+      "title": "Technical Guidelines on SBOM, QBOM & CBOM (v2.0)",
+      "ref": "CERT-In Technical Guidelines v2.0",
+      "date": "2025-07-09",
+      "url": "https://www.cert-in.org.in/PDF/TechnicalGuidelines-on-SBOM,QBOM&CBOM,AIBOM_and_HBOM_ver2.0.pdf"
+    }
+  ],
+  "claims": [
+    {
+      "id": "certin-cbom-named",
+      "headline": "CERT-In names the 'Cryptographic Bill of Materials (CBOM)' as the inventory foundation",
+      "quote": "… an inventory … often referred to as a Cryptographic Bill of Materials (CBOM), of the components …",
+      "where": "CIWP-2025-0002, Transitioning to Quantum Cyber Readiness",
+      "citation": { "sourceFile": "CERT-In-CIWP-2025-0002-Quantum-Cyber-Readiness.pdf", "page": 8, "line": 11, "url": "https://www.cert-in.org.in/s2cMainServlet?pageid=WHTPVIEW01" },
+      "cryptaMapLevel": "DIRECT",
+      "cryptaMapNote": "CryptaMap produces exactly this — a CycloneDX CBOM of the organisation's (AWS) cryptographic assets. CryptaMap IS the artifact CERT-In names as the foundation of quantum readiness."
+    },
+    {
+      "id": "certin-cbom-definition",
+      "headline": "CERT-In's CBOM definition matches CryptaMap's output fields",
+      "quote": "… an inventory of cryptographic assets—including algorithms, keys, protocols, certificates, and dependencies—capturing critical metadata such as usage patterns and expiration dates.",
+      "where": "CERT-In Technical Guidelines on SBOM/QBOM/CBOM v2.0",
+      "citation": { "sourceFile": "CERT-In-Technical-Guidelines-SBOM-QBOM-CBOM-v2.0.pdf", "page": 43, "line": 19, "url": "https://www.cert-in.org.in/PDF/TechnicalGuidelines-on-SBOM,QBOM&CBOM,AIBOM_and_HBOM_ver2.0.pdf" },
+      "cryptaMapLevel": "DIRECT",
+      "cryptaMapNote": "CryptaMap's CBOM captures algorithms, keys, protocols and certificates with metadata (key size, TLS version, cert validity, rotation) for the AWS surface — a near-1:1 match to CERT-In's defined CBOM elements. Honest gap: 'dependencies' (software component graph) is a full-SBOM concern CryptaMap does not cover."
+    },
+    {
+      "id": "certin-automated-discovery",
+      "headline": "CERT-In calls for automated, cloud-native cryptographic discovery",
+      "quote": "Cloud-native discovery for containerized and serverless environments …",
+      "where": "CIWP-2025-0002, §1.4 Automated Cryptographic Discovery Tools",
+      "citation": { "sourceFile": "CERT-In-CIWP-2025-0002-Quantum-Cyber-Readiness.pdf", "page": 16, "line": 13, "url": "https://www.cert-in.org.in/s2cMainServlet?pageid=WHTPVIEW01" },
+      "cryptaMapLevel": "DIRECT",
+      "cryptaMapNote": "CryptaMap is automated, cloud-native cryptographic discovery for AWS (containers, serverless, managed services) — the exact tooling category CERT-In recommends over manual inventory."
+    }
+  ],
+  "honestCaveats": [
+    "These are CERT-In ADVISORY documents (a whitepaper + recommended technical guidelines), NOT an enforced sectoral regulation. They describe best practice and define the CBOM/QBOM; they do not, by themselves, impose a binding obligation the way a sectoral circular does.",
+    "CERT-In is the national umbrella; the binding obligations sit with the sector regulators (SEBI / IRDAI here). Use this view as the authoritative national description, and the regulator pages for what is actually required of you.",
+    "CryptaMap covers the AWS crypto surface and is evidence, not certification."
+  ]
+}

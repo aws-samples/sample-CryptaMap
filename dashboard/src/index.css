@@ -1,0 +1,11 @@
+/* Cloudscape Design System provides global styling via
+   @cloudscape-design/global-styles (imported in main.tsx). This file keeps only
+   minimal app-root sizing; the former Tailwind directives + custom .severity-*
+   classes were removed in the Cloudscape redesign. */
+
+html,
+body,
+#root {
+  margin: 0;
+  min-height: 100vh;
+}

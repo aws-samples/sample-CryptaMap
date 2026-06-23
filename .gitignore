@@ -1,0 +1,110 @@
+# Binaries
+dist/
+# Anchored to the repo root: ignores a top-level compiled ./bin/ dir, NOT
+# cdk/bin/ (the CDK app entrypoint, real source). An unanchored `bin/` wrongly
+# matched cdk/bin/ and left cdk/bin/app.ts — the whole deploy wiring — untracked.
+/bin/
+bootstrap
+*.exe
+*.dll
+*.so
+*.dylib
+# Anchored to the repo root so it only ignores the compiled `cryptamap` binary,
+# NOT the cmd/cryptamap/ source directory (an unanchored `cryptamap` pattern
+# matched the cmd/cryptamap/ path component and wrongly ignored the CLI source).
+/cryptamap
+dist/cryptamap
+
+# Test
+*.out
+coverage.txt
+coverage.html
+
+# Go workspace
+go.work
+go.work.sum
+
+# Node
+node_modules/
+.pnpm-store/
+npm-debug.log*
+
+# CDK
+cdk.out/
+cdk.context.json
+.cdk.staging/
+# CDK TypeScript build output (compiled from lib/*.ts and bin/*.ts)
+cdk/lib/*.js
+cdk/lib/*.d.ts
+cdk/bin/*.js
+cdk/bin/*.d.ts
+*.tsbuildinfo
+
+# Vite/React build
+dashboard/dist/
+.vite/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*~
+.DS_Store
+
+# Local agent/editor session state (never commit)
+.claude/
+.cursor/
+.aider*
+
+# Local config
+.env
+.env.local
+*.local.yaml
+
+# LocalStack
+.localstack/
+volume/
+
+# Generated CBOM outputs (artifacts of running)
+dist/mock-output/
+dist/scan-output/
+*.cbom.json
+
+# Real-account org data for LOCAL viewing only (never commit — contains real
+# account IDs). DEPRECATED workflow: the .local.json in-place-swap is removed —
+# view real data with `cryptamap serve ./out` instead. The ignore stays repo-wide
+# as a belt-and-suspenders so a stray real scan named *.local.json can never be
+# committed from anywhere in the tree.
+*.local.json
+dashboard/view-real-org-data.sh
+
+# `make build-serve` stages the dashboard bundle into cmd/cryptamap/webdist for
+# go:embed. Only the committed placeholder index.html is tracked; ignore the
+# generated bundle. (The build-serve leak guard also physically strips any
+# *.local.json before embedding — go:embed ignores .gitignore.)
+cmd/cryptamap/webdist/assets/
+cmd/cryptamap/webdist/mock/
+cmd/cryptamap/webdist/compliance/
+cmd/cryptamap/webdist/*.js
+cmd/cryptamap/webdist/*.css
+cmd/cryptamap/webdist/*.svg
+cmd/cryptamap/webdist/*.png
+cmd/cryptamap/webdist/*.ico
+cmd/cryptamap/webdist/config.json
+
+# Local dev artifacts (maintainer-only workflow scripts, not part of the shipped tool)
+audit-workflow.js
+
+# AI-assistant MCP config — authoring tooling, never ship in a public sample
+.mcp.json
+
+# Research inputs — copyrighted regulator primary sources (CERT-In/IRDAI/RBI/etc.).
+# NEVER commit: IP/copyright-sensitive, and not needed to build or run the tool.
+research data/
+research-data/
+
+# Compiled gen-* tool binaries built ad hoc at the repo root (run via `go run`).
+/gen-dashboard-mock
+/gen-policy
+/gen-ts
+/gen-knowledge
