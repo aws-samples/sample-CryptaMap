@@ -22,6 +22,47 @@ For the deeper design — taxonomy, the PQC matrix, the merge/roadmap engines, t
 org fan-out topology, and the generated-types contract — see
 [`ARCHITECTURE.md`](./ARCHITECTURE.md).
 
+## Dashboard
+
+CryptaMap ships a **local-first** React/Cloudscape dashboard: run a scan, then
+`cryptamap serve` renders the results over loopback (`127.0.0.1` only — no public
+surface). The screenshots below show **synthetic demo data**, not a real AWS scan.
+
+<div align="center">
+  <img width="800" alt="CryptaMap dashboard — cryptographic posture overview: total assets, quantum-vulnerable count, quantum-safe %, and one-flip quick wins" src="docs/img/dashboard-overview.png">
+  <br>
+  <sub><i>Cryptographic posture at a glance — assets, what's quantum-vulnerable, your quantum-safe %, and how many fixes are one-flip quick wins.</i></sub>
+</div>
+
+### Try it in two minutes (synthetic data, no AWS account)
+
+```bash
+make build-serve                                            # build the CLI with the dashboard embedded
+./dist/cryptamap --mock --mock-scale 10 --output-dir ./out  # generate a synthetic scan
+./dist/cryptamap serve --dir ./out                          # open the dashboard on 127.0.0.1
+```
+
+<details>
+<summary><b>More dashboard views</b> — PQC migration roadmap &amp; full asset inventory</summary>
+
+<br>
+
+<div align="center">
+  <img width="800" alt="CryptaMap dashboard — prioritized PQC migration roadmap with cited AWS actions" src="docs/img/dashboard-roadmap.png">
+  <br>
+  <sub><i>Prioritized PQC migration roadmap — what to fix first, each item with an effort estimate and a cited AWS action.</i></sub>
+</div>
+
+<br>
+
+<div align="center">
+  <img width="800" alt="CryptaMap dashboard — full cryptographic asset inventory grouped by AWS category, with quantum posture and PQC status per asset" src="docs/img/dashboard-assets.png">
+  <br>
+  <sub><i>Full cryptographic asset inventory — every discovered asset across AWS categories, with its quantum posture and whether a PQC fix exists today.</i></sub>
+</div>
+
+</details>
+
 ## Architecture at a glance
 
 ```
