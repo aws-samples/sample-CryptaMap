@@ -19,7 +19,7 @@ import (
 //
 // Storage Gateway file-share data is server-side encrypted in S3 with AES-256 in
 // all modes — SSE-S3 (AWS-managed, the default), SSE-KMS, or DSSE-KMS (opt-in
-// customer key). All are symmetric and quantum-safe at rest, so posture is
+// customer key). All are symmetric and quantum-resistant at rest, so posture is
 // SymmetricOnly; the EncryptionType only distinguishes the key tier.
 type StorageGatewayScanner struct{}
 

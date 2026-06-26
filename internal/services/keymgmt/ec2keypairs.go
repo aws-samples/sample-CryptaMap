@@ -89,7 +89,7 @@ func (s EC2KeyPairsScanner) scan(ctx context.Context, client ec2KeyPairsAPI, acc
 			a.Properties["keyType"] = keyType
 			services.StampObserved(&a, "high")
 		} else {
-			a.Properties["note"] = "Key type not reported by the API; an EC2 key pair always has an underlying classical algorithm, so this is treated as classical-unknown, never quantum-safe."
+			a.Properties["note"] = "Key type not reported by the API; an EC2 key pair always has an underlying classical algorithm, so this is treated as classical-unknown, never quantum-resistant."
 		}
 		if kp.KeyName != nil {
 			a.Properties["keyName"] = *kp.KeyName

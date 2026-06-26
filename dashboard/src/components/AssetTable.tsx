@@ -71,7 +71,7 @@ export const ASSET_COLUMNS: TableProps.ColumnDefinition<AssetRow>[] = [
     id: 'pqcStatus',
     header: 'PQC status',
     cell: (r) => {
-      // Asset-aware: a quantum-safe posture must never read "Not yet available",
+      // Asset-aware: a quantum-resistant posture must never read "Not yet available",
       // even for an unjoined row with an empty/stale pqcStatus.
       const s = pqcStatusPresentationForAsset(r.pqcStatus, r.posture);
       // Only fully-unknown (no posture signal, no status) rows show a dash.

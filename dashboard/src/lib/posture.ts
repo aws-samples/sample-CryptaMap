@@ -59,12 +59,12 @@ export interface PostureView {
 // symmetric-only / pqc-hybrid / pqc-ready (INFORMATIONAL) > unknown.
 const POSTURE: Record<CryptoPosture, PostureView> = {
   'no-encryption': { label: 'No encryption', indicator: 'error', severity: 'CRITICAL' },
-  'legacy-tls': { label: 'Legacy TLS', indicator: 'error', severity: 'HIGH' },
-  'non-pqc-classical': { label: 'Classical (non-PQC)', indicator: 'warning', severity: 'MEDIUM' },
-  'symmetric-only': { label: 'Symmetric only', indicator: 'success', severity: 'INFORMATIONAL' },
-  'pqc-hybrid': { label: 'PQC hybrid', indicator: 'success', severity: 'INFORMATIONAL' },
-  'pqc-ready': { label: 'PQC ready', indicator: 'success', severity: 'INFORMATIONAL' },
-  unknown: { label: 'Unknown', indicator: 'pending', severity: 'INFORMATIONAL' },
+  'legacy-tls': { label: 'Quantum-vulnerable (traditional public-key)', indicator: 'error', severity: 'HIGH' },
+  'non-pqc-classical': { label: 'Quantum-vulnerable (traditional public-key)', indicator: 'warning', severity: 'MEDIUM' },
+  'symmetric-only': { label: 'Quantum-resistant at rest (symmetric AES-256)', indicator: 'success', severity: 'INFORMATIONAL' },
+  'pqc-hybrid': { label: 'Hybrid PQ key exchange, traditional certificate', indicator: 'success', severity: 'INFORMATIONAL' },
+  'pqc-ready': { label: 'Migrated to post-quantum cryptography', indicator: 'success', severity: 'INFORMATIONAL' },
+  unknown: { label: 'Unknown / needs investigation', indicator: 'pending', severity: 'INFORMATIONAL' },
 };
 
 const UNKNOWN_POSTURE: PostureView = POSTURE.unknown;
@@ -117,16 +117,16 @@ export interface PqcStatusView {
 }
 
 // PQC_STATUS registry. NOTE the asset-aware framing: backend EffectivePQCStatus
-// (internal/pqc/lookup.go) already promotes a quantum-SAFE asset's "not-yet" to
+// (internal/pqc/lookup.go) already promotes a quantum-RESISTANT asset's "not-yet" to
 // "not-applicable", so by the time a row reaches the UI, "not-applicable" means
-// "already quantum-safe — no action", NOT a neutral "doesn't apply". We label it
+// "already quantum-resistant — no action", NOT a neutral "doesn't apply". We label it
 // that way so a safe asset NEVER reads as an alarming gap. "not-yet" is reserved
 // for genuinely quantum-vulnerable assets with no shipped PQC fix.
 const PQC_STATUS: Record<PQCStatus, PqcStatusView> = {
   available: { label: 'PQC available', indicator: 'success' },
   'hybrid-tls-only': { label: 'PQC hybrid (TLS only)', indicator: 'info' },
   'not-yet': { label: 'Not yet available', indicator: 'warning' },
-  'not-applicable': { label: 'Quantum-safe — no action', indicator: 'success' },
+  'not-applicable': { label: 'Quantum-resistant — no action', indicator: 'success' },
   // Maturity stage 0: no cryptographic baseline, so PQC readiness is not
   // assessable. Deliberately NOT 'warning' (that reads as a pending PQC fix) and
   // NOT 'success' (the resource is unencrypted — CRITICAL on the posture axis).
@@ -143,9 +143,9 @@ export function pqcStatusLabel(status: string | undefined): string {
   return pqcStatusPresentation(status).label;
 }
 
-// Postures that are themselves a positive quantum-safe signal: symmetric-only
+// Postures that are themselves a positive quantum-resistant signal: symmetric-only
 // (AES-256 at rest), pqc-hybrid (only auth remains classical), pqc-ready (pure
-// PQC). Mirrors internal/pqc/lookup.go isQuantumSafePosture so the UI agrees
+// PQC). Mirrors internal/pqc/lookup.go isQuantumResistantPosture so the UI agrees
 // with the backend EffectivePQCStatus rule.
 const QUANTUM_SAFE_POSTURES = new Set<CryptoPosture>([
   'symmetric-only',
@@ -153,17 +153,17 @@ const QUANTUM_SAFE_POSTURES = new Set<CryptoPosture>([
   'pqc-ready',
 ]);
 
-/** True when a posture is already quantum-safe (no key-exchange migration needed). */
-export function isQuantumSafePosture(posture: string | undefined): boolean {
+/** True when a posture is already quantum-resistant (no key-exchange migration needed). */
+export function isQuantumResistantPosture(posture: string | undefined): boolean {
   return QUANTUM_SAFE_POSTURES.has(posture as CryptoPosture);
 }
 
 /**
  * pqcStatusPresentationForAsset is the ASSET-AWARE presentation used by the
- * asset tables / detail panel. It guarantees a quantum-safe asset NEVER shows
- * the alarming "Not yet available": when the posture is itself a quantum-safe
+ * asset tables / detail panel. It guarantees a quantum-resistant asset NEVER shows
+ * the alarming "Not yet available": when the posture is itself a quantum-resistant
  * signal, a 'not-yet' (or empty/missing) status is presented as
- * "Quantum-safe — no action" instead. This is the UI mirror of the backend
+ * "Quantum-resistant — no action" instead. This is the UI mirror of the backend
  * EffectivePQCStatus promotion for any row that slipped through unjoined or with
  * a stale status. For a genuine 'available' / 'hybrid-tls-only' / 'not-yet'
  * (vulnerable) status it defers to the plain pqcStatusPresentation.
@@ -179,8 +179,8 @@ export function pqcStatusPresentationForAsset(
   if (posture === 'no-encryption') {
     return PQC_STATUS['not-encrypted'];
   }
-  if (isQuantumSafePosture(posture) && (status === 'not-yet' || !status || status === 'not-applicable')) {
-    return { label: 'Quantum-safe — no action', indicator: 'success' };
+  if (isQuantumResistantPosture(posture) && (status === 'not-yet' || !status || status === 'not-applicable')) {
+    return { label: 'Quantum-resistant — no action', indicator: 'success' };
   }
   return pqcStatusPresentation(status);
 }
@@ -204,7 +204,7 @@ export interface StrengthView {
 
 const SYMMETRIC_STRENGTH: Record<SymmetricStrength, StrengthView> = {
   // AES-256 (or stronger): Grover only halves to ~128-bit effective — safe.
-  'quantum-safe': { label: 'AES-256 — quantum-safe', indicator: 'success' },
+  'quantum-safe': { label: 'AES-256 — quantum-resistant', indicator: 'success' },
   // AES-128/192: adequate today, smaller Grover margin — review / consider AES-256.
   'adequate-review': { label: 'AES-128/192 — adequate, review', indicator: 'info' },
   // DES/3DES/RC4: classically weak or broken irrespective of quantum — replace now.
@@ -346,7 +346,7 @@ function lowEffort(ease: UpgradeEase | undefined): boolean {
 export function roadmapTier(
   item: Pick<RoadmapItem, 'pqcStatus' | 'upgradeEase'>,
 ): RoadmapTier {
-  // (1) Already quantum-safe / nothing asymmetric to migrate — checked FIRST.
+  // (1) Already quantum-resistant / nothing asymmetric to migrate — checked FIRST.
   if (item.pqcStatus === 'not-applicable') return 'no-action';
   // (2) PQC available today AND a one-flip / config-change fix.
   if (pqcReady(item.pqcStatus) && lowEffort(item.upgradeEase)) return 'act-now';
@@ -362,7 +362,7 @@ export function tierLabel(tier: RoadmapTier): string {
     case 'plan-watch':
       return 'Plan / Watch';
     case 'no-action':
-      return 'Safe';
+      return 'No action';
   }
 }
 
@@ -382,7 +382,7 @@ export function tierBadge(tier: RoadmapTier): TierBadgeView {
     case 'plan-watch':
       return { label: 'Plan / Watch', color: 'blue' };
     case 'no-action':
-      return { label: 'Safe', color: 'green' };
+      return { label: 'No action', color: 'green' };
   }
 }
 

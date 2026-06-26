@@ -109,7 +109,7 @@ export default function CoveragePanel() {
               ))}
             </ul>
             <Box variant="small" color="text-body-secondary">
-              This transparency is the point: comprehensive coverage of the
+              This transparency is the point: broad coverage of the
               cryptographic attack surface, with a documented edge — not a round
               number.
             </Box>

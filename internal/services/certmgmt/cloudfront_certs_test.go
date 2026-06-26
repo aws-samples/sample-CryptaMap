@@ -132,7 +132,7 @@ func TestCloudFrontCertsScanErrorPropagates(t *testing.T) {
 // a CloudFront viewer certificate is RSA/ECDSA authentication — classical,
 // Shor-broken — and ML-DSA PQC certs are NOT offered for CloudFront. The asset's
 // posture MUST therefore be non-pqc-classical, never pqc-hybrid/pqc-ready
-// (a false-safe that would mark classical auth as quantum-safe / no-action) and
+// (a false-safe that would mark classical auth as quantum-resistant / no-action) and
 // never no-encryption (the cert exists, so encryption is present). This holds
 // even when there is NO viewer certificate ARN, because CloudFront always serves
 // the distribution over TLS with a (default) classical cert.
@@ -169,14 +169,14 @@ func TestCloudFrontCertsHonestyPosture(t *testing.T) {
 		}
 		posture := cloudfrontcertsPostureOf(a)
 		if posture != string(models.PostureNonPQCClassical) {
-			t.Errorf("asset %q: expected posture %q (classical cert is Shor-broken, not quantum-safe), got %q",
+			t.Errorf("asset %q: expected posture %q (classical cert is Shor-broken, not quantum-resistant), got %q",
 				id, models.PostureNonPQCClassical, posture)
 		}
 		if posture == string(models.PostureNoEncryption) {
 			t.Errorf("asset %q: a viewer certificate is an encryption channel — must NOT be classified no-encryption", id)
 		}
 		if posture == string(models.PosturePQCHybrid) || posture == string(models.PosturePQCReady) {
-			t.Errorf("asset %q: false-safe — classical RSA/ECDSA cert must NOT be marked quantum-safe (%q)", id, posture)
+			t.Errorf("asset %q: false-safe — classical RSA/ECDSA cert must NOT be marked quantum-resistant (%q)", id, posture)
 		}
 	}
 	// The ACM-backed asset must also carry its cert reference (no silent drop of

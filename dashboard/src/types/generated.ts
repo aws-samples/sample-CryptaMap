@@ -90,6 +90,7 @@ export interface ScanSummary {
   high: number;
   medium: number;
   informational: number;
+  inventoryOnly: number;
   serviceCount: number;
 }
 

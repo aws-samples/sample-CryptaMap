@@ -3,7 +3,7 @@
   "knowledgeVersion": "2026-06-03",
   "asOf": "2026-06-03",
   "generatedBy": "literals",
-  "digest": "sha256:7dd82ff8647f83e00727c10d7de22f3d16c623e0170a364b23692760226f3379",
+  "digest": "sha256:b2a091ca84b4403d8242bc569b10000ff970677a8b657621daaa26cd116b435c",
   "serviceMatrix": [
     {
       "serviceKey": "acm",
@@ -82,9 +82,9 @@
       "displayName": "Amazon CloudFront",
       "cryptoFunction": "data-in-transit",
       "pqcStatus": "hybrid-tls-only",
-      "pqcMechanism": "Quantum-safe (hybrid) key exchange X25519MLKEM768 and SecP256r1MLKEM768 for viewer-to-CloudFront TLS; TLS 1.3 only; negotiated automatically, no separate PQ toggle",
+      "pqcMechanism": "Quantum-resistant (hybrid) key exchange X25519MLKEM768 and SecP256r1MLKEM768 for viewer-to-CloudFront TLS; TLS 1.3 only; negotiated automatically, no separate PQ toggle",
       "upgradeEase": "aws-managed-automatic",
-      "howToEnable": "No separate PQ knob. Use a CloudFront security policy that allows TLS 1.3 (e.g. TLSv1.2_2021 or TLSv1.3_2025); quantum-safe groups negotiate automatically when the viewer supports them. TLS 1.2-only viewers cannot use PQ.",
+      "howToEnable": "No separate PQ knob. Use a CloudFront security policy that allows TLS 1.3 (e.g. TLSv1.2_2021 or TLSv1.3_2025); quantum-resistant groups negotiate automatically when the viewer supports them. TLS 1.2-only viewers cannot use PQ.",
       "confidence": "high",
       "sourceUrl": "https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/secure-connections-supported-viewer-protocols-ciphers.html",
       "notes": "Verified verbatim against live CloudFront doc (2026-06-03): supports X25519MLKEM768 and SecP256r1MLKEM768, 'only supported with TLS 1.3'. NOTE: only two groups (no SecP384r1MLKEM1024, unlike ELB). Signature schemes remain classical RSA/ECDSA (no ML-DSA), so authentication is NOT post-quantum. CryptaMap source comment 'PQC-default since 2024' over-asserts the date; the capability is real but tie it to TLS 1.3 negotiation, not a 2024 default."
@@ -99,7 +99,7 @@
       "howToEnable": "No PQ-TLS option documented for these database engines' in-transit channels. Track AWS announcements. (At-rest for these services is AES-256 / quantum-resistant — a SEPARATE asset/row; do not conflate.)",
       "confidence": "medium",
       "sourceUrl": "https://aws.amazon.com/blogs/security/aws-post-quantum-cryptography-migration-plan/",
-      "notes": "Dedicated row so the *_transit scanners do NOT inherit their at-rest sibling's not-applicable status (which would FALSE-SAFE a classical TLS endpoint as quantum-safe). The transit channel is classical; the at-rest row stays not-applicable independently."
+      "notes": "Dedicated row so the *_transit scanners do NOT inherit their at-rest sibling's not-applicable status (which would FALSE-SAFE a classical TLS endpoint as quantum-resistant). The transit channel is classical; the at-rest row stays not-applicable independently."
     },
     {
       "serviceKey": "documentdb",
@@ -156,7 +156,7 @@
       "pqcStatus": "available",
       "pqcMechanism": "ML-DSA digital signatures (FIPS 204) via key specs ML_DSA_44/65/87, signing algorithm ML_DSA_SHAKE_256; separately, hybrid ECDH+ML-KEM (X25519MLKEM768) for TLS to the KMS endpoint",
       "upgradeEase": "config-change",
-      "howToEnable": "PQ signing: CreateKey with KeySpec=ML_DSA_44|ML_DSA_65|ML_DSA_87, KeyUsage=SIGN_VERIFY; sign with SigningAlgorithm=ML_DSA_SHAKE_256. PQ TLS to endpoint: AwsCrtAsyncHttpClient.builder().postQuantumTlsEnabled(true). NOTE: no ML-KEM *key spec* exists in KMS; data-at-rest under KMS uses AES-256-GCM (SYMMETRIC_DEFAULT), already quantum resistant.",
+      "howToEnable": "PQ signing: CreateKey with KeySpec=ML_DSA_44|ML_DSA_65|ML_DSA_87, KeyUsage=SIGN_VERIFY; sign with SigningAlgorithm=ML_DSA_SHAKE_256. Hybrid PQ-TLS (ECDH+ML-KEM, X25519MLKEM768) to endpoint: AwsCrtAsyncHttpClient.builder().postQuantumTlsEnabled(true). NOTE: no ML-KEM *key spec* exists in KMS; data-at-rest under KMS uses AES-256-GCM (SYMMETRIC_DEFAULT), already quantum resistant.",
       "confidence": "high",
       "sourceUrl": "https://docs.aws.amazon.com/kms/latest/developerguide/asymmetric-key-specs.html",
       "notes": "Verified against live AWS KMS docs (2026-06-03): ML_DSA_44/65/87 key specs and ML_DSA_SHAKE_256 GA; RSA_2048/3072/4096, ECC_NIST_P256/P384/P521, ECC_NIST_EDWARDS25519, ECC_SECG_P256K1, SM2 remain classical/quantum-vulnerable. AES-256-GCM explicitly described by AWS as quantum resistant. ML-DSA GA announced 2025-06-13. In CryptaMap taxonomy this maps to the kms_spec/kms_usage/kms_rotation family (alias 'kms')."
@@ -204,7 +204,7 @@
       "pqcStatus": "not-applicable",
       "pqcMechanism": "AES-256 storage encryption via KMS - symmetric, quantum resistant",
       "upgradeEase": "aws-managed-automatic",
-      "howToEnable": "No PQC action for at-rest. For RDS in-transit TLS (rds_transit), PQ key exchange depends on the database engine TLS stack, which AWS does not document as PQ-hybrid; treat transit as classical.",
+      "howToEnable": "No PQC action for at-rest. For RDS in-transit TLS (rds_transit), PQ key exchange depends on the database engine TLS stack, which AWS does not document as PQ-hybrid; treat transit as traditional (non-PQC).",
       "confidence": "high",
       "sourceUrl": "https://aws.amazon.com/blogs/security/aws-post-quantum-cryptography-migration-plan/",
       "notes": "At-rest AES-256 quantum resistant. The separate rds_transit channel is classical (no documented PQ-hybrid); do not flag at-rest as quantum-vulnerable."
@@ -985,7 +985,7 @@
       "asOf": "2026-06-09"
     },
     "sdkpqc/container_images/ecr-at-rest-encryption": {
-      "value": "Amazon ECR encrypts repository contents at rest by default, and the encryption behavior is a definitional guarantee of the ECR EncryptionType enum: AES256 uses SSE-S3 AES-256, and KMS/KMS_DSSE with a symmetric (or AWS-managed/unreadable) key spec is a KMS-backed AES symmetric envelope. Both are symmetric-only and quantum-safe at rest. This provenance is stamped only when the resolved at-rest posture is symmetric-only.",
+      "value": "Amazon ECR encrypts repository contents at rest by default, and the encryption behavior is a definitional guarantee of the ECR EncryptionType enum: AES256 uses SSE-S3 AES-256, and KMS/KMS_DSSE with a symmetric (or AWS-managed/unreadable) key spec is a KMS-backed AES symmetric envelope. Both are symmetric-only and quantum-resistant at rest. This provenance is stamped only when the resolved at-rest posture is symmetric-only.",
       "sourceUrl": "https://docs.aws.amazon.com/AmazonECR/latest/userguide/encryption-at-rest.html",
       "confidence": "high",
       "asOf": "2026-06-09"
@@ -1009,7 +1009,7 @@
       "asOf": "2026-06-10"
     },
     "transit/appsync/aws-tls-policy": {
-      "value": "AWS AppSync documents its own minimum transit-TLS floor on its Infrastructure Security / data-protection pages: clients accessing AppSync's published API endpoints must support TLS 1.2, with TLS 1.3 recommended (\"We require TLS 1.2 and recommend TLS 1.3\"), and perfect-forward-secrecy cipher suites (DHE/ECDHE). This is a documented TLS 1.2 minimum for the served endpoint; the exact version negotiated per connection depends on the client and is not pinned. No post-quantum / quantum-safe transit guarantee is documented. TLS for resolver hops to EC2 or CloudFront origins is the customer's responsibility and outside this floor.",
+      "value": "AWS AppSync documents its own minimum transit-TLS floor on its Infrastructure Security / data-protection pages: clients accessing AppSync's published API endpoints must support TLS 1.2, with TLS 1.3 recommended (\"We require TLS 1.2 and recommend TLS 1.3\"), and perfect-forward-secrecy cipher suites (DHE/ECDHE). This is a documented TLS 1.2 minimum for the served endpoint; the exact version negotiated per connection depends on the client and is not pinned. No post-quantum / quantum-resistant transit guarantee is documented. TLS for resolver hops to EC2 or CloudFront origins is the customer's responsibility and outside this floor.",
       "sourceUrl": "https://docs.aws.amazon.com/appsync/latest/devguide/infrastructure-security.html",
       "confidence": "high",
       "asOf": "2026-06-10"

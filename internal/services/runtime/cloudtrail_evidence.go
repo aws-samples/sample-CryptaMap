@@ -97,7 +97,7 @@ func parseRuntimeAlgo(cloudTrailEventJSON string) (algo, keySpec, signingAlgo st
 // primitive -> PQCReady, NOT PQCHybrid (hybrid is reserved for the combined TLS
 // KEX group X25519MLKEM768, handled separately in tlsObservedPosture). RSA / ECDSA
 // / ECC / EdDSA -> classical; symmetric / AES -> symmetric-only; anything
-// unrecognized -> Unknown (never assumed quantum-safe).
+// unrecognized -> Unknown (never assumed quantum-resistant).
 func runtimePosture(algo string) models.CryptoPosture {
 	a := strings.ToUpper(algo)
 	a = strings.ReplaceAll(a, "-", "_")
@@ -113,7 +113,7 @@ func runtimePosture(algo string) models.CryptoPosture {
 	case strings.HasPrefix(a, "SYMMETRIC"), strings.Contains(a, "AES"):
 		return models.PostureSymmetricOnly
 	}
-	// An algorithm string we do not recognize is NOT assumed quantum-safe. KMS
+	// An algorithm string we do not recognize is NOT assumed quantum-resistant. KMS
 	// algorithm enums can expand; defaulting an unknown observed algorithm to
 	// SymmetricOnly was a FALSE-SAFE (it could hide a new classical or unclassified
 	// primitive). Unknown is the honest, conservative verdict.

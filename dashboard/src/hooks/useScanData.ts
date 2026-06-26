@@ -223,43 +223,63 @@ export function postureFromCounts(perPosture: Record<string, number>): PostureSu
   return out;
 }
 
-// MaturitySummary frames posture counts as a cryptographic MATURITY LADDER:
+// MaturitySummary frames posture counts as the honest six-tier crypto breakdown
+// plus two derived headline callouts. It deliberately REPLACES the retired single
+// headline percentage, which over-credited AES-256-at-rest (symmetric-only) as
+// if it were PQC migration progress and folded it into a "good" numerator.
 //
-//   stage 0  unencrypted        — no cryptographic baseline (data-hygiene
-//                                 prerequisite); PQC is not assessable yet
-//   stage 1  encrypted-vulnerable — encrypted but quantum-vulnerable (the prime
-//                                 PQC migration target)
-//   stage 2  quantum-safe       — symmetric-AES-256 / pqc-hybrid / pqc-ready
+// The six tiers map 1:1 onto the existing CryptoPosture enum values (no new enum
+// values are added):
+//   No encryption                         = noEncryption
+//   Quantum-vulnerable (traditional PK)    = legacyTLS + nonPQCClassical
+//   Quantum-resistant at rest (AES-256)    = symmetricOnly   (NOT PQC)
+//   Hybrid PQ key exchange, classical cert = pqcHybrid       (NOT fully resistant)
+//   Migrated to post-quantum cryptography  = pqcReady
+//   Unknown / needs investigation          = unknown
 //
-// The headline "% quantum-safe" is stage2 / (stage1 + stage2): it measures
-// progress AMONG ENCRYPTED assets only. Stage 0 (unencrypted) and unknown
-// (unassessable) are deliberately EXCLUDED from the denominator — an unencrypted
-// resource is a different (data-hygiene) problem, not a quantum-readiness one, so
-// counting it as "not quantum-safe" both distorts the percentage and conflates two
-// distinct remediation tracks. Stage 0 is surfaced on its own as a prerequisite.
+// Two derived callouts:
+//   quantumVulnerablePct = (legacyTLS + nonPQCClassical) / totalClassifiable
+//     — the prime migration target as a share of CLASSIFIABLE assets (every tier
+//       EXCEPT unknown; no-encryption IS in the denominator but is not itself
+//       quantum-vulnerable). Mirrors backend quantumVulnerablePct.
+//   pqcEndToEndPct = pqcReady / total
+//     — fully PQC-migrated end-to-end as a share of ALL assets. Hybrid-with-
+//       classical-cert (pqcHybrid) is NEVER counted as fully resistant, and
+//       symmetric-only AES-256 at rest is not PQC. Mirrors backend pqcEndToEndPct.
 export interface MaturitySummary {
-  stage0Unencrypted: number;
-  stage1Vulnerable: number;
-  stage2QuantumSafe: number;
+  noEncryption: number;
+  quantumVulnerable: number;
+  symmetricOnly: number;
+  pqcHybrid: number;
+  pqcReady: number;
   unknown: number;
-  /** Encrypted + classifiable assets: the PQC-maturity denominator (stage1+stage2). */
-  encrypted: number;
-  /** stage2 / encrypted, rounded to a whole percent; 0 when no encrypted assets. */
-  quantumSafePct: number;
+  /** All classifiable assets (every tier except unknown): quantumVulnerablePct denominator. */
+  totalClassifiable: number;
+  /** All assets (every tier incl. unknown): pqcEndToEndPct denominator. */
+  total: number;
+  /** (legacyTLS+nonPQCClassical)/totalClassifiable, 0-100; 0 when none classifiable. */
+  quantumVulnerablePct: number;
+  /** pqcReady/total, 0-100 (hybrid + symmetric EXCLUDED); 0 when no assets. */
+  pqcEndToEndPct: number;
 }
 
 export function summarizeMaturity(p: PostureSummary): MaturitySummary {
-  const stage0Unencrypted = p.noEncryption;
-  const stage1Vulnerable = p.legacyTLS + p.nonPQCClassical;
-  const stage2QuantumSafe = p.symmetricOnly + p.pqcHybrid + p.pqcReady;
-  const encrypted = stage1Vulnerable + stage2QuantumSafe;
+  const quantumVulnerable = p.legacyTLS + p.nonPQCClassical;
+  const totalClassifiable =
+    p.noEncryption + quantumVulnerable + p.symmetricOnly + p.pqcHybrid + p.pqcReady;
+  const total = totalClassifiable + p.unknown;
   return {
-    stage0Unencrypted,
-    stage1Vulnerable,
-    stage2QuantumSafe,
+    noEncryption: p.noEncryption,
+    quantumVulnerable,
+    symmetricOnly: p.symmetricOnly,
+    pqcHybrid: p.pqcHybrid,
+    pqcReady: p.pqcReady,
     unknown: p.unknown,
-    encrypted,
-    quantumSafePct: encrypted > 0 ? Math.round((stage2QuantumSafe / encrypted) * 100) : 0,
+    totalClassifiable,
+    total,
+    quantumVulnerablePct:
+      totalClassifiable > 0 ? Math.round((quantumVulnerable / totalClassifiable) * 100) : 0,
+    pqcEndToEndPct: total > 0 ? Math.round((p.pqcReady / total) * 100) : 0,
   };
 }
 

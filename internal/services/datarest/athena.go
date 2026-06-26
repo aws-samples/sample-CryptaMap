@@ -119,7 +119,7 @@ func (s AthenaScanner) scan(ctx context.Context, client athenaAPI, accountID, re
 						athenatypes.EncryptionOptionSseKms,
 						athenatypes.EncryptionOptionCseKms:
 						// All three are AES-256 symmetric (S3-managed, KMS envelope, or
-						// client-side KMS) — quantum-safe at rest.
+						// client-side KMS) — quantum-resistant at rest.
 						posture = models.PostureSymmetricOnly
 						props = services.AESAtRest()
 					}

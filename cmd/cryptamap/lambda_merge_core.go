@@ -113,10 +113,26 @@ type mergeSummary struct {
 	// summarizePosture over CBOM components) so the Overview can render KPIs from
 	// /summary without downloading the full CBOM.
 	Posture mergeSummaryPosture `json:"posture"`
-	// QuantumSafePct is stage2 / (stage1 + stage2) as a whole percent, mirroring
-	// the dashboard summarizeMaturity headline (stage0 no-encryption + unknown are
-	// EXCLUDED from the denominator). 0 when there are no encrypted assets.
-	QuantumSafePct int `json:"quantumSafePct"`
+	// QuantumVulnerablePct and PQCEndToEndPct are the two honest headline callouts
+	// that REPLACE the retired single headline percentage (which conflated
+	// AES-256-at-rest with true PQC migration). They mirror the dashboard
+	// summarizeMaturity callouts so /summary and a client-side count over the CBOM
+	// agree.
+	//
+	// QuantumVulnerablePct = (legacyTLS + nonPQCClassical) / totalClassifiable as a
+	// whole percent: the share of CLASSIFIABLE assets still relying on
+	// quantum-vulnerable traditional public-key crypto (the prime migration target).
+	// totalClassifiable EXCLUDES only Unknown (unassessable); no-encryption IS
+	// counted in the denominator (it is a classified posture) but is not itself
+	// quantum-vulnerable. 0 when there are no classifiable assets.
+	QuantumVulnerablePct int `json:"quantumVulnerablePct"`
+	// PQCEndToEndPct = pqcReady / total as a whole percent: the share of ALL assets
+	// fully migrated to post-quantum cryptography end-to-end. Hybrid PQ key exchange
+	// with a traditional certificate (PQCHybrid) is DELIBERATELY EXCLUDED from the
+	// numerator — a hybrid-with-classical-cert asset is not yet fully resistant.
+	// Symmetric-only AES-256 at rest is NOT PQC and is excluded too. 0 when there
+	// are no assets.
+	PQCEndToEndPct int `json:"pqcEndToEndPct"`
 }
 
 // mergeSummaryPosture mirrors the dashboard PostureSummary: one count per
@@ -406,7 +422,8 @@ func buildMergeSummary(res merge.Result, runID string, keys mergedArtifactKeys, 
 		ExpectedAccounts:       acctBarrier.expectedAccounts,
 		MissingAccounts:        acctBarrier.accountIDs(),
 		Posture:                posture,
-		QuantumSafePct:         quantumSafePct(posture),
+		QuantumVulnerablePct:   quantumVulnerablePct(posture),
+		PQCEndToEndPct:         pqcEndToEndPct(posture),
 	}
 }
 
@@ -438,18 +455,36 @@ func summarizePostureCounts(assets []models.CryptoAsset) mergeSummaryPosture {
 	return p
 }
 
-// quantumSafePct mirrors the dashboard summarizeMaturity headline: the share of
-// ENCRYPTED+classifiable assets that are quantum-safe, i.e. stage2 / (stage1 +
-// stage2), rounded to a whole percent. Stage 0 (no-encryption) and unknown are
-// excluded from the denominator.
-func quantumSafePct(p mergeSummaryPosture) int {
-	stage1Vulnerable := p.LegacyTLS + p.NonPQCClassical
-	stage2QuantumSafe := p.SymmetricOnly + p.PQCHybrid + p.PQCReady
-	encrypted := stage1Vulnerable + stage2QuantumSafe
-	if encrypted == 0 {
+// roundPct rounds num/den to a whole percent, matching the dashboard's
+// Math.round (round half up for positive values), in integer math as
+// (2*num*100 + den) / (2*den). Returns 0 when den is 0 (never a divide-by-zero).
+func roundPct(num, den int) int {
+	if den == 0 {
 		return 0
 	}
-	// Whole-percent rounding matching the dashboard's Math.round (round half up
-	// for positive values), in integer math as (2*num + den) / (2*den).
-	return (2*stage2QuantumSafe*100 + encrypted) / (2 * encrypted)
+	return (2*num*100 + den) / (2 * den)
+}
+
+// quantumVulnerablePct mirrors the dashboard summarizeMaturity callout: the share
+// of CLASSIFIABLE assets still on quantum-vulnerable traditional public-key crypto
+// (legacy TLS + classical non-PQC), as a whole percent. The denominator is all
+// classifiable assets — every posture EXCEPT Unknown (unassessable). 0 when there
+// are no classifiable assets.
+func quantumVulnerablePct(p mergeSummaryPosture) int {
+	vulnerable := p.LegacyTLS + p.NonPQCClassical
+	totalClassifiable := p.NoEncryption + p.LegacyTLS + p.NonPQCClassical +
+		p.SymmetricOnly + p.PQCHybrid + p.PQCReady
+	return roundPct(vulnerable, totalClassifiable)
+}
+
+// pqcEndToEndPct mirrors the dashboard summarizeMaturity callout: the share of ALL
+// assets fully migrated to post-quantum cryptography end-to-end (PQCReady only), as
+// a whole percent. Hybrid PQ key exchange with a traditional certificate
+// (PQCHybrid) is DELIBERATELY EXCLUDED — it is not yet fully resistant — and
+// symmetric-only AES-256 at rest is not PQC. The denominator is the full asset
+// total (every posture incl. Unknown). 0 when there are no assets.
+func pqcEndToEndPct(p mergeSummaryPosture) int {
+	total := p.NoEncryption + p.LegacyTLS + p.NonPQCClassical +
+		p.SymmetricOnly + p.PQCHybrid + p.PQCReady + p.Unknown
+	return roundPct(p.PQCReady, total)
 }

@@ -29,7 +29,7 @@
       "where": "Cybersecurity & Quantum Computing, Box Item 7",
       "citation": { "sourceFile": "SEBI-CSCRF-2024-113.pdf", "page": 59, "line": 36, "url": "https://www.sebi.gov.in/legal/circulars/aug-2024/cybersecurity-and-cyber-resilience-framework-cscrf-for-sebi-regulated-entities-res-_85964.html" },
       "cryptaMapLevel": "DIRECT",
-      "cryptaMapNote": "CryptaMap builds exactly this: a cryptographic-asset inventory (CBOM) across the AWS org, flagging which assets are not quantum-safe so they can be prioritized for PQC migration. Scope honesty: CryptaMap covers the AWS-managed-service crypto surface, not the org's entire 'all IT systems'."
+      "cryptaMapNote": "CryptaMap builds exactly this: a cryptographic-asset inventory (CBOM) across the AWS org, flagging which assets are not quantum-resistant so they can be prioritized for PQC migration. Scope honesty: CryptaMap covers the AWS-managed-service crypto surface, not the org's entire 'all IT systems'."
     },
     {
       "id": "sebi-pq-risk-assessment",
@@ -47,7 +47,7 @@
       "where": "Cybersecurity & Quantum Computing, Box Item 7",
       "citation": { "sourceFile": "SEBI-CSCRF-2024-113.pdf", "page": 59, "line": 39, "url": "https://www.sebi.gov.in/legal/circulars/aug-2024/cybersecurity-and-cyber-resilience-framework-cscrf-for-sebi-regulated-entities-res-_85964.html" },
       "cryptaMapLevel": "SUPPORTING",
-      "cryptaMapNote": "CryptaMap's classification (quantum-safe vs not, hybrid-PQ TLS detection) informs the can/cannot-migrate triage. The strategy development and QKD feasibility study are organizational decisions outside CryptaMap's scope."
+      "cryptaMapNote": "CryptaMap's classification (quantum-resistant vs not, hybrid-PQ TLS detection) informs the can/cannot-migrate triage. The strategy development and QKD feasibility study are organizational decisions outside CryptaMap's scope."
     },
     {
       "id": "sebi-sbom-encryption-used",

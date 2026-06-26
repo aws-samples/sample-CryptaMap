@@ -46,7 +46,7 @@ func kmsSpecPosture(keySpec string) models.CryptoPosture {
 	}
 	// Unknown / future KeySpec: classify Unknown, NOT symmetric-only. Defaulting an
 	// unrecognized spec to symmetric-only would FALSE-SAFE a new asymmetric/quantum-
-	// vulnerable spec as quantum-safe; Unknown is the conservative posture.
+	// vulnerable spec as quantum-resistant; Unknown is the conservative posture.
 	return models.PostureUnknown
 }
 

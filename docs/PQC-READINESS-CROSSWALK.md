@@ -6,26 +6,26 @@ If you have run the **AWS Config managed rule for PQC TLS readiness** (the "PQC-
 
 ## TL;DR
 
-- CryptaMap's headline metric is **"% quantum-safe"** — the share of assessable assets that are already quantum-resistant. We use **"quantum-resistant" / "quantum-safe"** deliberately, matching **NIST IR 8547** and the **CycloneDX/CBOMkit** `quantum-safe | quantum-vulnerable | not-applicable | unknown` vocabulary.
+- CryptaMap's headline metric is **"% quantum-resistant"** — the share of assessable assets that are already quantum-resistant. We use **"quantum-resistant"** deliberately, matching **NIST IR 8547** and the **CycloneDX/CBOMkit** `quantum-safe | quantum-vulnerable | not-applicable | unknown` vocabulary.
 - The AWS Config scanner's **Tier 1/2/3** ranking is a **single-Config-tool convention**. It is useful, but it is not an AWS-wide or industry standard — see [Why we don't adopt "Tier"](#why-cryptamap-does-not-adopt-tier).
-- The two tools also have **very different scope** (below). A clean Config "Tier 1" tells you about your TLS endpoints; it does **not** mean your org is quantum-safe.
+- The two tools also have **very different scope** (below). A clean Config "Tier 1" tells you about your TLS endpoints; it does **not** mean your org is quantum-resistant.
 
 ## The crosswalk
 
-| CryptaMap posture | CryptaMap maturity / `% quantum-safe` | AWS Config PQC-Readiness tier | NIST / industry term | Migration priority |
+| CryptaMap posture | CryptaMap maturity / `% quantum-resistant` | AWS Config PQC-Readiness tier | NIST / industry term | Migration priority |
 |---|---|---|---|---|
-| `pqc-ready` (pure PQC) **or** `pqc-hybrid` with a **TLS 1.3-only** floor | Stage 2 — counts toward `% quantum-safe` | **Tier 1** — "PQ-ready (strongest)": TLS 1.3-only + PQC, Config priority *None* | **Quantum-resistant** | None / done |
-| `pqc-hybrid` with a **TLS 1.2 + 1.3** floor (backward-compatible) | Stage 2 — counts toward `% quantum-safe` | **Tier 2** — "PQ-ready (backward compatible)": TLS 1.2+1.3 + PQC, Config priority *Low* | **Quantum-resistant** (key exchange), with a downgrade-able floor | Low — tighten the TLS floor to 1.3 when clients allow |
-| `non-pqc-classical` (RSA/ECDHE, no ML-KEM) | Stage 1 — NOT quantum-safe | **Tier 3** — "Not PQ-ready": no PQC, Config priority *High* | **Quantum-vulnerable** | High — primary migration target |
-| `legacy-tls` (TLS 1.0/1.1) | Stage 1 — NOT quantum-safe | **Tier 3** — "Not PQ-ready" (also fails on protocol age) | **Quantum-vulnerable** (and classically deprecated) | High — fix the protocol first, then PQC |
+| `pqc-ready` (pure PQC) **or** `pqc-hybrid` with a **TLS 1.3-only** floor | Stage 2 — counts toward `% quantum-resistant` | **Tier 1** — "PQ-ready (strongest)": TLS 1.3-only + PQC, Config priority *None* | **Quantum-resistant** | None / done |
+| `pqc-hybrid` with a **TLS 1.2 + 1.3** floor (backward-compatible) | Stage 2 — counts toward `% quantum-resistant` | **Tier 2** — "PQ-ready (backward compatible)": TLS 1.2+1.3 + PQC, Config priority *Low* | **Quantum-resistant** (key exchange), with a downgrade-able floor | Low — tighten the TLS floor to 1.3 when clients allow |
+| `non-pqc-classical` (RSA/ECDHE, no ML-KEM) | Stage 1 — NOT quantum-resistant | **Tier 3** — "Not PQ-ready": no PQC, Config priority *High* | **Quantum-vulnerable** | High — primary migration target |
+| `legacy-tls` (TLS 1.0/1.1) | Stage 1 — NOT quantum-resistant | **Tier 3** — "Not PQ-ready" (also fails on protocol age) | **Quantum-vulnerable** (and classically deprecated) | High — fix the protocol first, then PQC |
 | `no-encryption` | Stage 0 — not assessable for PQC | Out of scope (the rule evaluates TLS-enabled endpoints) | n/a — no cryptographic baseline | Highest — encrypt first; PQC is not assessable until a baseline exists |
-| `symmetric-only` (AES-256 at rest) | Stage 2 — counts toward `% quantum-safe` | **Out of tier scope** — the Config rule covers TLS endpoints, not at-rest symmetric data | **Quantum-resistant** (AES-256; Grover only halves effective strength) | None — already resistant |
-| `unknown` | Excluded from the `% quantum-safe` denominator | Not evaluated / `INSUFFICIENT_DATA` | **Unknown / unassessed** | Investigate to classify |
+| `symmetric-only` (AES-256 at rest) | Stage 2 — counts toward `% quantum-resistant` | **Out of tier scope** — the Config rule covers TLS endpoints, not at-rest symmetric data | **Quantum-resistant** (AES-256; Grover only halves effective strength) | None — already resistant |
+| `unknown` | Excluded from the `% quantum-resistant` denominator | Not evaluated / `INSUFFICIENT_DATA` | **Unknown / unassessed** | Investigate to classify |
 
 Notes on the mapping:
 
 - **The TLS-1.3-only vs TLS-1.2+1.3 split is exactly what separates AWS Tier 1 from Tier 2.** CryptaMap captures it as an **optional protocol property** on the asset — the TLS floor (`cryptamap:tlsMinVersion`, the minimum version the endpoint's policy accepts) shown as "Minimum TLS version (floor)" in the asset detail panel — **not** as a separate posture or tier. A `pqc-hybrid` asset is quantum-resistant on the key-exchange axis whether its floor is 1.2 or 1.3. The floor is a *hardening* detail, not a readiness class.
-- **`% quantum-safe` denominator.** CryptaMap's headline ratio is `stage2 / (stage1 + stage2)` — i.e. quantum-resistant assets over all *assessable* assets. Stage-0 (`no-encryption`) and `unknown` are excluded from the denominator so an unencrypted resource never masquerades as a PQC "pass" and an unclassified one never silently counts either way.
+- **`% quantum-resistant` denominator.** CryptaMap's headline ratio is `stage2 / (stage1 + stage2)` — i.e. quantum-resistant assets over all *assessable* assets. Stage-0 (`no-encryption`) and `unknown` are excluded from the denominator so an unencrypted resource never masquerades as a PQC "pass" and an unclassified one never silently counts either way.
 - **Roadmap tier ≠ AWS tier.** CryptaMap's own `act-now | plan-watch | no-action` roadmap tiers are a **priority-to-fix** ordering (act-now = worst/most-urgent). AWS Config's Tier 1 = *best*. The two "tier" axes point in **opposite** directions — another reason CryptaMap keeps its vocabulary separate. Do not equate "CryptaMap act-now" with "AWS Tier 1".
 
 ## Scope: why a clean Config tier is not a clean bill of health

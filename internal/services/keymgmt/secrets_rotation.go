@@ -123,7 +123,7 @@ func (s SecretsRotationScanner) scan(ctx context.Context, client secretsRotation
 				a.Properties["lastChangedDate"] = sec.LastChangedDate.UTC().Format(time.RFC3339)
 			}
 
-			// The secret VALUE is AES-256 at rest (symmetric-only, quantum safe) — the
+			// The secret VALUE is AES-256 at rest (symmetric-only, quantum-resistant) — the
 			// correct default. When a customer-managed CMK encrypts it, resolve that
 			// key's KeySpec so an asymmetric/PQC CMK refines the posture via the same
 			// kmsSpecPosture helper kms_spec uses; otherwise keep SymmetricOnly.

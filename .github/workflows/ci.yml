@@ -48,6 +48,24 @@ jobs:
       - name: scan for real-account data / secrets
         run: bash scripts/scan-secrets.sh
 
+  lint-terms:
+    name: Banned-term gate (quantum-safe -> quantum-resistant)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      # Fail the build if the misleading user-visible term "quantum-safe" (in any
+      # written form) reappears in a customer-readable surface (dashboard source,
+      # Go source, README, CHANGELOG, docs). The remediation replaced it with
+      # "quantum-resistant"; this gate stops the wording from silently regressing.
+      # Deliberate wire-value / signal / proper-noun / external-vocab exemptions are
+      # encoded as an explicit allowlist inside the script. Generated/re-synced
+      # artifacts (dashboard/dist, cmd/cryptamap/webdist) are excluded — the regen
+      # step reproduces them from the now-clean source.
+      - name: banned-term gate
+        run: bash scripts/lint-terms.sh
+
   go:
     name: Go build / vet / test
     runs-on: ubuntu-latest

@@ -22,9 +22,9 @@ func TestCloudFrontPosture(t *testing.T) {
 		{"TLSv1", models.PosturePQCHybrid},
 		{"TLSv1_2016", models.PosturePQCHybrid},
 		{"TLSv1.1_2016", models.PosturePQCHybrid},
-		// Unknown/unreadable floor: conservative, not quantum-safe.
+		// Unknown/unreadable floor: conservative, not quantum-resistant.
 		{"", models.PostureNonPQCClassical},
-		// TLS 1.3-capable floors: ML-KEM hybrid negotiates -> quantum-safe.
+		// TLS 1.3-capable floors: ML-KEM hybrid negotiates -> quantum-resistant.
 		{"TLSv1.2_2018", models.PosturePQCHybrid},
 		{"TLSv1.2_2019", models.PosturePQCHybrid},
 		{"TLSv1.2_2021", models.PosturePQCHybrid},

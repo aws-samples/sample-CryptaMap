@@ -16,7 +16,7 @@ import (
 //
 // CloudFront's MinimumProtocolVersion is a negotiation FLOOR, not a ceiling: the
 // supported-protocols matrix shows TLS 1.3 available under EVERY CloudFront
-// security policy, so a TLS-1.3-capable client negotiates the quantum-safe hybrid
+// security policy, so a TLS-1.3-capable client negotiates the quantum-resistant hybrid
 // groups (X25519MLKEM768) opportunistically regardless of the floor. Classifying
 // a low-floor policy (SSLv3 / TLSv1 / TLSv1_2016 / TLSv1.1_2016) as LegacyTLS on
 // the floor alone was a FALSE-ALARM — those distributions DO offer TLS 1.3 + ML-
@@ -25,7 +25,7 @@ import (
 // field (see cloudFrontFloorWarning), not by denying the PQC-hybrid capability.
 func cloudFrontPosture(minProtocolVersion string) models.CryptoPosture {
 	if minProtocolVersion == "" {
-		// Unknown/unreadable floor: be conservative, do not assert quantum-safe.
+		// Unknown/unreadable floor: be conservative, do not assert quantum-resistant.
 		return models.PostureNonPQCClassical
 	}
 	// All CloudFront security policies allow TLS 1.3 negotiation, so the hybrid

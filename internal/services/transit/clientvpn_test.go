@@ -102,7 +102,7 @@ func TestClientVPNScanErrorPropagates(t *testing.T) {
 // is OpenVPN-over-TLS with a MANDATORY classical server cert + classical key
 // exchange and NO AWS PQ-hybrid option, so every endpoint must be classified
 // NonPQCClassical (a quantum-migration target) — never NoEncryption (the
-// transport IS always encrypted) and never a quantum-safe / clean posture.
+// transport IS always encrypted) and never a quantum-resistant / clean posture.
 func TestClientVPNScanHonestPosture(t *testing.T) {
 	client := &fakeClientVPNEC2Client{
 		clientvpnPages: []*ec2.DescribeClientVpnEndpointsOutput{
@@ -130,7 +130,7 @@ func TestClientVPNScanHonestPosture(t *testing.T) {
 		t.Fatalf("expected an asset for endpoint cvpn-endpoint-tls; assets=%v", assets)
 	}
 	if got := a.Properties["posture"]; got != string(models.PostureNonPQCClassical) {
-		t.Errorf("Client VPN endpoint must be posture %q (classical TLS, no PQ option), got %q (must never be NoEncryption or a clean/quantum-safe posture)",
+		t.Errorf("Client VPN endpoint must be posture %q (classical TLS, no PQ option), got %q (must never be NoEncryption or a clean/quantum-resistant posture)",
 			models.PostureNonPQCClassical, got)
 	}
 	// Mandatory-encryption posture must never collapse to a no-encryption claim.

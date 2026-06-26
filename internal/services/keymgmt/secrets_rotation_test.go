@@ -161,7 +161,7 @@ func TestSecretsRotationDefaultManagedKeyIsSymmetricOnly(t *testing.T) {
 // TestSecretsRotationCustomerKeySpecRefinesPosture verifies spec mapping through
 // kmsSpecPosture: an asymmetric (RSA) customer CMK refines the posture to
 // NonPQCClassical (quantum-vulnerable), never staying SymmetricOnly. This is the
-// false-safe guard — an asymmetric CMK must not masquerade as quantum-safe.
+// false-safe guard — an asymmetric CMK must not masquerade as quantum-resistant.
 func TestSecretsRotationCustomerKeySpecRefinesPosture(t *testing.T) {
 	client := &secretsrotationFakeSM{
 		pages: []*secretsmanager.ListSecretsOutput{

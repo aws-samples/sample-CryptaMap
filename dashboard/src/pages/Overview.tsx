@@ -97,13 +97,12 @@ export default function Overview() {
     summary?.perPosture ? postureFromCounts(summary.perPosture) : summarizePosture(cbom);
   const total = summary?.totalAssets ?? realComponents(cbom).length;
   const cov = coverage(rows);
-  const pqcReadyOrHybrid = posture.pqcReady + posture.pqcHybrid;
-  // Maturity ladder: stage0 unencrypted → stage1 encrypted-vulnerable → stage2
-  // quantum-safe. "% quantum-safe" is stage2 / encrypted (stage1+stage2), so
-  // unencrypted (stage 0) and unknown are excluded from the denominator — they are
-  // a data-hygiene / unassessable concern, not a quantum-readiness shortfall.
+  // Honest six-tier crypto breakdown + two derived callouts (replaces the retired
+  // single headline percentage): "% quantum-vulnerable today" is the prime migration
+  // target among classifiable assets, and "% on PQC end-to-end" counts only assets
+  // fully migrated to post-quantum cryptography (hybrid-with-classical-cert and
+  // symmetric-only AES-256 at rest are NOT counted as fully resistant).
   const maturity = summarizeMaturity(posture);
-  const pqcReadyPct = maturity.quantumSafePct;
 
   return (
     <ContentLayout
@@ -171,12 +170,10 @@ export default function Overview() {
           total={total}
           posture={posture}
           maturity={maturity}
-          pqcReadyOrHybrid={pqcReadyOrHybrid}
           accounts={cov.accounts}
           regions={cov.regions}
           scannedAt={cbom.metadata.timestamp}
           quickWins={quickWinCount(roadmap)}
-          pqcReadyPct={pqcReadyPct}
         />
 
         <ReportsTeaser />

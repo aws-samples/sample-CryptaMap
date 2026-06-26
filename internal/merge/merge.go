@@ -237,6 +237,14 @@ func buildSummary(assets []models.CryptoAsset, findings []models.Finding) models
 			s.Informational++
 		}
 	}
+	// Mirror scanner.buildSummary (B3): reconcile the inventory-only count
+	// (quantum-resistant-at-rest symmetric AES-256, PostureSymmetricOnly) from the
+	// merged assets so the assets removed from the finding stream do not vanish.
+	for _, a := range assets {
+		if a.Properties != nil && a.Properties["posture"] == string(models.PostureSymmetricOnly) {
+			s.InventoryOnly++
+		}
+	}
 	return s
 }
 

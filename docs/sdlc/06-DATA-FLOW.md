@@ -189,8 +189,8 @@ become findings. For each asset it:
 3. sets the base severity from the posture (`sev = SeverityFromPosture(posture)`,
    `internal/scanner/findings.go:47`) and applies the **worse-of** Mosca/HNDL bump
    (`sev = HighestSeverity(sev, SeverityFromMosca(...))`, `findings.go:49`) **only
-   when the posture is not already quantum-safe** (`!risk.IsQuantumSafePosture(posture)`,
-   `findings.go:48`; `IsQuantumSafePosture` true for `symmetric-only`/`pqc-hybrid`/
+   when the posture is not already quantum-resistant** (`!risk.IsQuantumResistantPosture(posture)`,
+   `findings.go:48`; `IsQuantumResistantPosture` true for `symmetric-only`/`pqc-hybrid`/
    `pqc-ready` at `internal/risk/severity.go:42-49`);
 4. attaches `comp.MapAll(asset, posture)` compliance mappings when a registry is
    present (`internal/scanner/findings.go:51-53`).
@@ -198,14 +198,14 @@ become findings. For each asset it:
 > **Invariant — severity is posture-first, with a *gated* worse-of bump.** A
 > genuinely vulnerable RDS asset (e.g. `non-pqc-classical`) has Mosca
 > `10+2−3 = 9 → CRITICAL`, so the worse-of bump raises it to CRITICAL even though its
-> posture alone might map lower — HNDL urgency rightly applies. But a quantum-SAFE
+> posture alone might map lower — HNDL urgency rightly applies. But a quantum-resistant
 > `symmetric-only` (AES-256) RDS asset stays **INFORMATIONAL** (its posture severity);
 > the posture-blind Mosca score does **not** raise it, because Shor's algorithm does
 > not threaten AES no matter how long-lived the data
 > (`internal/risk/severity.go:24-35` for the posture mapping, `:42-49` for the gate).
 > **Note:** before this commit the worse-of was applied
 > *unconditionally*, so this same AES-256 store was wrongly stamped CRITICAL purely
-> from its Mosca score (a real mock scan had 38 such quantum-safe CRITICAL/HIGH
+> from its Mosca score (a real mock scan had 38 such quantum-resistant CRITICAL/HIGH
 > findings; now 0, with the assets still inventoried — only re-graded). Genuinely
 > vulnerable postures (`no-encryption`/`legacy-tls`/`non-pqc-classical`/`unknown`)
 > keep the worse-of behavior unchanged.
@@ -213,7 +213,7 @@ become findings. For each asset it:
 `BuildFindings` is deliberately dependency-light (stdlib + uuid + `internal/risk`
 + `internal/compliance` + `pkg/models`) so that the **same function** produces
 **identical *classification*** — posture, posture-first severity (worse-of Mosca
-only for non-quantum-safe postures), Mosca score, and compliance mappings, all
+only for non-quantum-resistant postures), Mosca score, and compliance mappings, all
 derived purely from the input asset — in three contexts:
 a live engine run (`internal/scanner/engine.go:235-237`), a `--mock` run
 (`internal/scanner/mock_engine.go:34`), and the offline CBOM-replay path
@@ -234,7 +234,7 @@ a live engine run (`internal/scanner/engine.go:235-237`), a `--mock` run
 
 | Field | Built from | Downstream |
 |---|---|---|
-| `Severity` | posture severity, with a worse-of Mosca bump only when `!IsQuantumSafePosture` (`findings.go:47-49`) | ASFF `Severity.Normalized` (90/70/40/0 via `NormalizedSeverity`, `pkg/models/finding.go:16-29`); summary tallies |
+| `Severity` | posture severity, with a worse-of Mosca bump only when `!IsQuantumResistantPosture` (`findings.go:47-49`) | ASFF `Severity.Normalized` (90/70/40/0 via `NormalizedSeverity`, `pkg/models/finding.go:16-29`); summary tallies |
 | `Posture` | `Properties["posture"]` | ASFF `ProductFields[cryptamap:posture]`; roadmap |
 | `AssetBomRef` | links back to `CryptoAsset.BomRef` | merge dedup key; ASFF product field |
 | `Mosca` | `risk.CalculateForService` | ASFF product field; roadmap urgency |
@@ -255,7 +255,7 @@ flowchart LR
     A -->|"service"| M["risk.CalculateForService<br/>(X+Y−Z)"]
     P --> SP["SeverityFromPosture<br/>(base)"]
     M --> SM["SeverityFromMosca"]
-    SP --> H["HighestSeverity bump<br/>only if !IsQuantumSafePosture"]
+    SP --> H["HighestSeverity bump<br/>only if !IsQuantumResistantPosture"]
     SM --> H
     A --> CM["compliance.MapAll"]
     H --> F["Finding"]
@@ -535,8 +535,13 @@ merged `Result` into the `scans/latest/<runId>.*` set using the **same**
 The `mergeSummary` (`cmd/cryptamap/lambda_merge_core.go:55-108`) carries
 per-account rollups, a per-posture count (`summarizePostureCounts`, which buckets on
 the same `cryptamap:posture` value the CBOM stamps,
-`cmd/cryptamap/lambda_merge_core.go:257-278`), a `quantumSafePct` headline
-(`stage2 / (stage1+stage2)`, `cmd/cryptamap/lambda_merge_core.go:284-294`), and a
+`cmd/cryptamap/lambda_merge_core.go:257-278`), the honest posture **breakdown**
+plus two derived headline callouts — `quantumVulnerablePct`
+(`(legacyTLS + nonPQCClassical) / total-classifiable`) and `pqcEndToEndPct`
+(`pqcReady / total`, hybrid-with-classical-cert deliberately excluded) — which
+together REPLACE the retired single `quantumSafePct` number that conflated
+symmetric-only AES-256-at-rest with genuine PQC migration
+(`cmd/cryptamap/lambda_merge_core.go:284-294`), and a
 **completion barrier**: `expectedShards` vs `observedShards` →
 `missingShards`/`complete`, so a decimated run never reports a clean, silently-smaller
 result (`cmd/cryptamap/lambda_merge_core.go:211-225`).
@@ -563,9 +568,9 @@ the data source:
   (`dashboard/src/services/api.ts:37-54,163-178`). The Overview KPIs are derived
   client-side from the CBOM via `summaryFromCBOM` (`dashboard/src/services/api.ts:111-141`),
   which counts `perPosture`/`totalCritical` inline (api.ts:117-128) but **delegates** the
-  headline posture-bucketing and `quantumSafePct` maturity math to `summarizePosture` /
-  `summarizeMaturity`, imported from `../hooks/useScanData`
-  (`dashboard/src/services/api.ts:3,112-113`) — so `quantumSafePct` itself is computed in
+  headline posture-bucketing and the breakdown/callout maturity math (`quantumVulnerablePct`,
+  `pqcEndToEndPct`) to `summarizePosture` / `summarizeMaturity`, imported from `../hooks/useScanData`
+  (`dashboard/src/services/api.ts:3,112-113`) — so the breakdown callouts are computed in
   `dashboard/src/hooks/useScanData.ts`, not in `api.ts`.
 - **Live mode** (dormant — not provisioned by anything CryptaMap ships): if a
   non-empty `apiBase` were configured, the client would GET `${apiBase}/cbom`,
@@ -689,7 +694,7 @@ The exact lines where data changes shape — useful as a jump table.
 > `BuildFindings`, and the `Merger` are pure and order-stable, the same input
 > resources produce **identical classification** — the same `BomRef`s, postures,
 > severities (posture-first, with the worse-of Mosca bump gated on
-> `!IsQuantumSafePosture`), Mosca scores, and compliance mappings, in the same sorted
+> `!IsQuantumResistantPosture`), Mosca scores, and compliance mappings, in the same sorted
 > order — whether they come from a live scan, `--mock`, the offline
 > `org-merge-files` replay, or the org Lambda merge. This is the property the whole
 > multi-path architecture relies on. Note it is *classification* determinism, not

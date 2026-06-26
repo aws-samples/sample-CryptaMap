@@ -9,7 +9,7 @@ import (
 // forbiddenPQCDeps are import-path substrings that MUST NEVER appear in the
 // transitive dependency set of internal/pqc. The PQC knowledge subsystem is the
 // air-gap-pure core of the customer scan path: it answers "is this crypto
-// quantum-safe?" purely from baked-in baseline data, with NO network, NO
+// quantum-resistant?" purely from baked-in baseline data, with NO network, NO
 // subprocess execution, and NO AWS / doc-oracle (knowledge-refresh MCP) code.
 // If any of these leaks in, the knowledge answers could become dependent on a
 // live oracle or egress channel — exactly what the air-gap guarantee forbids.

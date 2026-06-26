@@ -68,7 +68,7 @@ func (s CloudFrontKeyGroupsScanner) scan(ctx context.Context, client cloudfrontK
 				continue
 			}
 			id := *pk.Id
-			algoName, keyBits := "classical public key", 0
+			algoName, keyBits := "traditional public key", 0
 			if pk.EncodedKey != nil {
 				algoName, keyBits = parsePublicKeyAlgo(*pk.EncodedKey)
 			}
@@ -94,7 +94,7 @@ func (s CloudFrontKeyGroupsScanner) scan(ctx context.Context, client cloudfrontK
 			if pk.CreatedTime != nil {
 				a.Properties["createdTime"] = pk.CreatedTime.UTC().Format(time.RFC3339)
 			}
-			a.Properties["note"] = "CloudFront signed-URL/cookie verification key: classical RSA/ECDSA (quantum-vulnerable signature); no PQC option."
+			a.Properties["note"] = "CloudFront signed-URL/cookie verification key: traditional RSA/ECDSA (quantum-vulnerable signature); no PQC option."
 			assets = append(assets, a)
 			if services.TruncationCapReached(len(assets), s.Name(), region) {
 				return assets, nil
@@ -114,11 +114,11 @@ func (s CloudFrontKeyGroupsScanner) scan(ctx context.Context, client cloudfrontK
 func parsePublicKeyAlgo(encodedKeyPEM string) (string, int) {
 	block, _ := pem.Decode([]byte(encodedKeyPEM))
 	if block == nil {
-		return "classical public key (unparsed)", 0
+		return "traditional public key (unparsed)", 0
 	}
 	pub, err := x509.ParsePKIXPublicKey(block.Bytes)
 	if err != nil {
-		return "classical public key (unparsed)", 0
+		return "traditional public key (unparsed)", 0
 	}
 	switch k := pub.(type) {
 	case *rsa.PublicKey:
@@ -130,6 +130,6 @@ func parsePublicKeyAlgo(encodedKeyPEM string) (string, int) {
 		}
 		return "ECDSA", bits
 	default:
-		return "classical public key", 0
+		return "traditional public key", 0
 	}
 }

@@ -1,4 +1,4 @@
-.PHONY: build build-cli build-cdk build-dashboard build-serve release test mock integration deploy synth clean lint generate-types check-types generate-knowledge check-knowledge generate-policy check-policy
+.PHONY: build build-cli build-cdk build-dashboard build-serve release test mock integration deploy synth clean lint lint-terms generate-types check-types generate-knowledge check-knowledge generate-policy check-policy
 
 GOPACKAGES = ./internal/... ./pkg/... ./cmd/...
 DIST       = ./dist
@@ -89,7 +89,10 @@ destroy: ## Tear down CryptaMap CDK stacks (DESTRUCTIVE)
 clean: ## Remove build artefacts
 	rm -rf $(DIST) cdk/cdk.out dashboard/dist
 
-lint: ## Run linters
+lint-terms: ## Banned-term gate: fail if user-visible "quantum-safe" wording regresses (use "quantum-resistant")
+	bash scripts/lint-terms.sh
+
+lint: lint-terms ## Run linters
 	go vet $(GOPACKAGES)
 	cd dashboard && npm run lint || true
 

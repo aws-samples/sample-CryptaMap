@@ -246,9 +246,9 @@ The single source of truth for findings is the **pure** `BuildFindings`
 (`internal/scanner/findings.go:29-77`): it reads posture from `Properties`, computes
 the Mosca score per service, sets severity from the posture and then takes the worse
 of the posture- and Mosca-derived severities **only for postures that are not already
-quantum-safe**, and attaches compliance mappings. **Note:**
+quantum-resistant**, and attaches compliance mappings. **Note:**
 this worse-of bump used to be unconditional, which let the posture-blind Mosca score
-raise a quantum-safe AES-256 store to CRITICAL; now `risk.IsQuantumSafePosture`
+raise a quantum-resistant AES-256 store to CRITICAL; now `risk.IsQuantumResistantPosture`
 (`internal/risk/severity.go:42-49`, true for `symmetric-only` / `pqc-hybrid` /
 `pqc-ready`) gates it, so quantum-resistant assets stay INFORMATIONAL (still listed,
 just not alarmed) while genuinely-vulnerable postures keep the worse-of behavior
@@ -296,8 +296,8 @@ flowchart LR
   now. Per-service X/Y/Z defaults are tuned for Indian BFSI long-lived data (e.g.
   RDS/Aurora/DynamoDB 10/2/3) in `internal/risk/defaults.go:14-85`, falling back to
   5/1/3. Severity is the posture severity, with the **worse-of** Mosca/HNDL bump
-  applied **only to non-quantum-safe postures** (`internal/risk/severity.go:7-57`;
-  gate `IsQuantumSafePosture` at `:42-49`), so a long-lived `non-pqc-classical` RDS
+  applied **only to non-quantum-resistant postures** (`internal/risk/severity.go:7-57`;
+  gate `IsQuantumResistantPosture` at `:42-49`), so a long-lived `non-pqc-classical` RDS
   asset can be CRITICAL on Mosca grounds, while a `symmetric-only` (AES-256) asset
   stays INFORMATIONAL no matter its shelf-life (corrected — was
   an unconditional worse-of that wrongly raised AES-256 to CRITICAL).

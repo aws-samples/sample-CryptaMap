@@ -191,7 +191,7 @@ func TestPaymentsScanGetKeyFailureKeepsAsset(t *testing.T) {
 
 // TestPaymentsScanClassificationHonesty asserts the per-algorithm posture
 // contract for this key-management scanner:
-//   - AES_*  -> SymmetricOnly (quantum-safe-grade symmetric, never NoEncryption)
+//   - AES_*  -> SymmetricOnly (quantum-resistant-grade symmetric, never NoEncryption)
 //   - TDES_* -> SymmetricOnly (Grover-class, NOT a PQC migration target) AND
 //     carries the weakCipher legacy-cipher annotation (so symmetric != AES-grade)
 //   - RSA_*/ECC_* -> NonPQCClassical (asymmetric, quantum-vulnerable; never NoEncryption)

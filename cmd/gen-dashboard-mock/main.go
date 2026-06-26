@@ -15,7 +15,7 @@
 // writers (output.WriteCBOM / WriteRoadmapJSON) the live dashboard API serves. So
 // the demo data is shape-identical to a real org scan, exercises the real merge/
 // classification code, and shows a realistic spread of postures (the generator's
-// per-template PostureFor distribution yields quantum-safe / classical / no-encryption
+// per-template PostureFor distribution yields quantum-resistant / classical / no-encryption
 // / legacy-tls / pqc-hybrid mixes, plus AWS-managed vs customer-CMK key tiers).
 //
 // HONESTY / SAFETY:
@@ -77,7 +77,7 @@ var orgRegions = []string{"ap-south-1", "ap-south-2"}
 // committed JSON lean (~2k components across 11 accts x 2 regions x ~99 services)
 // while STILL showing full diversity: posture is chosen per-template by PostureFor's
 // distribution, so even one asset/service/account yields a realistic mix of
-// quantum-safe / classical / no-encryption / legacy-tls / pqc-hybrid across the org.
+// quantum-resistant / classical / no-encryption / legacy-tls / pqc-hybrid across the org.
 const scalePerService = 1
 
 // The orchestrator/management account that owns the org run (the merged CBOM's

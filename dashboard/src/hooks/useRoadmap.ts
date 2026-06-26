@@ -111,7 +111,7 @@ export interface TierSplit {
   actNow: RoadmapItem[];
   /** Plan / Watch — needs work but no low-effort fix published. */
   planWatch: RoadmapItem[];
-  /** No action — already quantum-safe (pqcStatus === 'not-applicable'). */
+  /** No action — already quantum-resistant (pqcStatus === 'not-applicable'). */
   noAction: RoadmapItem[];
 }
 

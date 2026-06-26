@@ -115,7 +115,7 @@ func TestPrimitiveStrengthTable(t *testing.T) {
 }
 
 // TestEffectivePQCStatusAssetAware proves the asset-aware override: a
-// quantum-safe signal promotes a not-yet service status to not-applicable, but a
+// quantum-resistant signal promotes a not-yet service status to not-applicable, but a
 // genuine vulnerable asset or an unconfirmed bare-AES stays not-yet, and a real
 // available/hybrid capability is never downgraded.
 func TestEffectivePQCStatusAssetAware(t *testing.T) {
@@ -135,18 +135,18 @@ func TestEffectivePQCStatusAssetAware(t *testing.T) {
 	if got := EffectivePQCStatus(StatusNotYet, "RSA-2048", models.PostureNonPQCClassical); got != StatusNotYet {
 		t.Errorf("RSA non-pqc-classical on not-yet = %q, want not-yet (no promotion)", got)
 	}
-	// Bare unsized AES (unknown primitive, no quantum-safe posture) stays not-yet.
+	// Bare unsized AES (unknown primitive, no quantum-resistant posture) stays not-yet.
 	if got := EffectivePQCStatus(StatusNotYet, "", models.PostureUnknown); got != StatusNotYet {
 		t.Errorf("unconfirmed/unknown on not-yet = %q, want not-yet (conservative)", got)
 	}
-	// A QUANTUM-SAFE asset must NOT advertise an actionable PQC capability, even
+	// A QUANTUM-RESISTANT asset must NOT advertise an actionable PQC capability, even
 	// when the SERVICE matrix row is available/hybrid. A symmetric AES-256 key has
 	// no asymmetric material to migrate, so "PQC available" is misleading — it is
 	// promoted to the no-action not-applicable. (This is the alias/aws/es case: a
 	// KMS symmetric key inheriting the kms row's StatusAvailable, which exists only
 	// for ML-DSA *signing* keys, must not read "PQC available".)
 	if got := EffectivePQCStatus(StatusAvailable, "AES-256-GCM", models.PostureSymmetricOnly); got != StatusNotApplicable {
-		t.Errorf("available on a quantum-safe (symmetric-only) asset = %q, want not-applicable (nothing to migrate)", got)
+		t.Errorf("available on a quantum-resistant (symmetric-only) asset = %q, want not-applicable (nothing to migrate)", got)
 	}
 	if got := EffectivePQCStatus(StatusHybridTLSOnly, "X25519MLKEM768", models.PosturePQCHybrid); got != StatusNotApplicable {
 		t.Errorf("hybrid-tls-only on an already-PQC (pqc-hybrid) asset = %q, want not-applicable (already migrated)", got)
@@ -164,14 +164,14 @@ func TestEffectivePQCStatusAssetAware(t *testing.T) {
 		t.Errorf("not-applicable passthrough, got %q", got)
 	}
 	// No-encryption posture -> not-encrypted (stage 0), checked FIRST and
-	// regardless of the service's matrix status: it is neither quantum-safe nor an
+	// regardless of the service's matrix status: it is neither quantum-resistant nor an
 	// awaiting-fix vulnerable asset, so it must NOT read as not-applicable/not-yet.
 	if got := EffectivePQCStatus(StatusNotYet, "", models.PostureNoEncryption); got != StatusNotEncrypted {
 		t.Errorf("no-encryption on not-yet = %q, want not-encrypted", got)
 	}
 	// The no-encryption override fires even when the matrix status is not 'not-yet'
 	// (e.g. a data-at-rest service whose row is not-applicable): an unencrypted
-	// instance of it is still stage 0, never quantum-safe.
+	// instance of it is still stage 0, never quantum-resistant.
 	if got := EffectivePQCStatus(StatusNotApplicable, "", models.PostureNoEncryption); got != StatusNotEncrypted {
 		t.Errorf("no-encryption on not-applicable = %q, want not-encrypted (override)", got)
 	}

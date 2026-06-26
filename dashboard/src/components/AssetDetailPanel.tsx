@@ -14,7 +14,7 @@ import type { ReactNode } from 'react';
 import {
   posturePresentation,
   pqcStatusPresentationForAsset,
-  isQuantumSafePosture,
+  isQuantumResistantPosture,
   upgradeEaseLabel,
   confidenceLabel,
   cryptoFunctionLabel,
@@ -333,7 +333,7 @@ function ProtocolDetail({ row }: { row: AssetRow }) {
                 <Badge color="blue">PQC hybrid — capable (policy permits)</Badge>
               )
             ) : pqcHybrid === false ? (
-              <Badge color="grey">Classical</Badge>
+              <Badge color="grey">Traditional</Badge>
             ) : (
               DASH
             ),
@@ -493,11 +493,11 @@ function PqcReadiness({ row }: { row: AssetRow }) {
   const posture = posturePresentation(row.posture);
 
   if (!item) {
-    // Unjoined asset: still apply the asset-aware rule so a quantum-safe posture
-    // (e.g. symmetric AES-256) reads "Quantum-safe — no action", never a blank
+    // Unjoined asset: still apply the asset-aware rule so a quantum-resistant posture
+    // (e.g. symmetric AES-256) reads "Quantum-resistant — no action", never a blank
     // or alarming gap.
     const pqcUnjoined = pqcStatusPresentationForAsset(row.pqcStatus, row.posture);
-    const safe = isQuantumSafePosture(row.posture);
+    const safe = isQuantumResistantPosture(row.posture);
     return (
       <SpaceBetween size="s">
         <KeyValuePairs
@@ -530,7 +530,7 @@ function PqcReadiness({ row }: { row: AssetRow }) {
     );
   }
 
-  // Asset-aware presentation: a quantum-safe posture never shows "Not yet".
+  // Asset-aware presentation: a quantum-resistant posture never shows "Not yet".
   const pqc = pqcStatusPresentationForAsset(item.pqcStatus, row.posture);
   const actionable = item.pqcStatus === 'available' || item.pqcStatus === 'hybrid-tls-only';
   const strength = strengthPresentation(item.symmetricStrength);
@@ -639,8 +639,8 @@ function pqcReasoning(posture: string, pqcStatus: string): string {
       return 'Legacy TLS (≤ 1.1) is in use. Upgrade to TLS 1.2/1.3 before considering PQC hybrid key exchange.';
     case 'non-pqc-classical':
       return pqcStatus === 'available' || pqcStatus === 'hybrid-tls-only'
-        ? 'Classical (non-PQC) cryptography is in use and a post-quantum option is available for this service.'
-        : 'Classical (non-PQC) cryptography is in use; no managed post-quantum option is available yet for this service.';
+        ? 'Traditional (non-PQC) cryptography is in use and a post-quantum option is available for this service.'
+        : 'Traditional (non-PQC) cryptography is in use; no managed post-quantum option is available yet for this service.';
     case 'symmetric-only':
       return 'Symmetric encryption (e.g. AES-256) is already quantum-resistant; no PQC key-exchange migration is required.';
     case 'pqc-hybrid':

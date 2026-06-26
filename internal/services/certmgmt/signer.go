@@ -126,7 +126,7 @@ func (s SignerScanner) scan(ctx context.Context, client signerAPI, accountID, re
 				if hashAlgo != "" {
 					a.Properties["hashAlgorithm"] = hashAlgo
 				}
-				a.Properties["note"] = "AWS Signer code-signing uses classical RSA/ECDSA signatures (quantum-vulnerable); no post-quantum option exists today."
+				a.Properties["note"] = "AWS Signer code-signing uses traditional RSA/ECDSA signatures (quantum-vulnerable); no post-quantum option exists today."
 				return a, true
 			})
 		assets = append(assets, page...)

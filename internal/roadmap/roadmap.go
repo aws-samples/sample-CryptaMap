@@ -110,11 +110,11 @@ func Build(scan models.ScanResult) Roadmap {
 			strength = pqc.SymmetricStrengthFor(asset.CryptoProps.AlgorithmProperties)
 		}
 
-		// Asset-aware pqcStatus: a quantum-safe asset (symmetric AES-256,
+		// Asset-aware pqcStatus: a quantum-resistant asset (symmetric AES-256,
 		// pqc-hybrid/pqc-ready posture, or a positively non-vulnerable resolved
 		// primitive) must never present the alarming "not-yet" badge. Promote it
-		// to the no-action / quantum-safe StatusNotApplicable. Only fires on a
-		// positive quantum-safe signal, so a bare unsized "AES" stays put.
+		// to the no-action / quantum-resistant StatusNotApplicable. Only fires on a
+		// positive quantum-resistant signal, so a bare unsized "AES" stays put.
 		effStatus := pqc.EffectivePQCStatus(sup.PQCStatus, primitive, f.Posture)
 
 		item := RoadmapItem{
@@ -280,7 +280,7 @@ func isQuickWin(sup pqc.SupportEntry) bool {
 }
 
 // isQuickWinEffective is isQuickWin gated on the ASSET-AWARE effective status, so
-// a quantum-safe asset (whose effStatus was promoted to not-applicable) is never
+// a quantum-resistant asset (whose effStatus was promoted to not-applicable) is never
 // counted as a quick-win even when its SERVICE row is one-flip+available. Without
 // this, a symmetric AES key on a one-flip service would inflate the quick-win KPI
 // despite having nothing to migrate. The effective status must itself be

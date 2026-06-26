@@ -180,7 +180,7 @@ func TestKMSRotationDescribeKeyErrorNotSilentlyDropped(t *testing.T) {
 	}
 	// With no metadata, keySpec stays the "kms-managed" placeholder. The
 	// conservative posture for an UNKNOWN spec is Unknown (NOT a false-safe
-	// SymmetricOnly that would imply quantum-safe, and NOT a no-encryption
+	// SymmetricOnly that would imply quantum-resistant, and NOT a no-encryption
 	// verdict). Rotation must also be reported inapplicable.
 	if p := a.Properties["posture"]; p != string(models.PostureUnknown) {
 		t.Errorf("DescribeKey-failed key: expected Unknown fallback posture (conservative), got %q", p)
@@ -293,7 +293,7 @@ func TestKMSRotationCustomKeyStoreIsInapplicable(t *testing.T) {
 // TestKMSRotationUnknownSpecIsUnknownNotSymmetric guards the conservative
 // fallback: a future/unrecognized asymmetric-looking KeySpec must classify as
 // Unknown (NOT SymmetricOnly), so a new quantum-vulnerable spec is never
-// false-safed as quantum-safe.
+// false-safed as quantum-resistant.
 func TestKMSRotationUnknownSpecIsUnknownNotSymmetric(t *testing.T) {
 	client := &fakeKMSRotationClient{
 		listPages: []*kms.ListKeysOutput{

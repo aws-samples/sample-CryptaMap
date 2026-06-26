@@ -79,7 +79,7 @@ export const COVERAGE: CoverageFacts = {
     {
       key: 'runtime-evidence',
       label: 'Runtime & SDK evidence',
-      blurb: 'Observed PQ-TLS / KMS crypto operations from CloudTrail, plus SDK & runtime PQC-readiness signals.',
+      blurb: 'Observed hybrid post-quantum (ML-KEM) TLS key-exchange / KMS crypto operations from CloudTrail, plus SDK & runtime PQC-readiness signals.',
       scanners: 4,
     },
   ],

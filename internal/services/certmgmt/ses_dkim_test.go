@@ -59,7 +59,7 @@ func TestClassifySESDKIM(t *testing.T) {
 				"confidence":              "high",
 			},
 			noteContains: []string{
-				"classical RSA signature",
+				"traditional RSA signature",
 				"RSA_2048_BIT",
 				"quantum-vulnerable",
 				"Easy-DKIM (AWS_SES): AWS holds the DKIM private key",
@@ -85,7 +85,7 @@ func TestClassifySESDKIM(t *testing.T) {
 				"source":                  "observed",
 			},
 			noteContains: []string{
-				"classical RSA signature",
+				"traditional RSA signature",
 				"BYODKIM (EXTERNAL): customer-supplied DKIM key",
 			},
 			wantPrimitive: models.PrimitiveSignature,

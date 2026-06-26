@@ -101,7 +101,7 @@ func TestClassifyEventBus(t *testing.T) {
 				t.Errorf("note should be absent for customer CMK, got %q", note)
 			}
 
-			// Spot-check the at-rest cipher block is the quantum-safe AES-256 baseline,
+			// Spot-check the at-rest cipher block is the quantum-resistant AES-256 baseline,
 			// not a fabricated or empty algorithm.
 			if a.CryptoProps.AlgorithmProperties == nil || a.CryptoProps.AlgorithmProperties.AlgorithmName != "AES-256" {
 				t.Errorf("expected AES-256 at-rest algorithm, got %+v", a.CryptoProps.AlgorithmProperties)

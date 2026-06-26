@@ -23,7 +23,7 @@ export const CRYPTO_FIELD_HELP: Record<string, FieldHelp> = {
   // --- Algorithm (keys / at-rest encryption) ---
   algorithm: {
     header: 'Algorithm',
-    body: 'The specific cipher protecting the data, e.g. AES-256-GCM. Symmetric ciphers like AES-256 are considered quantum-safe; public-key algorithms like RSA and ECDSA are not.',
+    body: 'The specific cipher protecting the data, e.g. AES-256-GCM. Symmetric ciphers like AES-256 are considered quantum-resistant; public-key algorithms like RSA and ECDSA are not.',
     topic: 'pqc',
   },
   primitive: {
@@ -36,12 +36,12 @@ export const CRYPTO_FIELD_HELP: Record<string, FieldHelp> = {
   },
   keySizeBits: {
     header: 'Key size (bits)',
-    body: 'The length of the key in bits — larger is stronger. AES-256 means a 256-bit key. A quantum computer effectively halves a symmetric key’s strength, so AES-256 (→128-bit equivalent) stays safe while AES-128 (→64-bit) does not.',
+    body: 'The length of the key in bits — larger is stronger. AES-256 means a 256-bit key. A quantum computer effectively halves a symmetric key’s strength, so AES-256 (→128-bit equivalent) stays quantum-resistant while AES-128 (→64-bit) does not.',
     topic: 'pqc',
   },
   kmsKeySpec: {
     header: 'KMS key spec',
-    body: 'AWS KMS’s own name for the key type. SYMMETRIC_DEFAULT is a 256-bit AES key (quantum-safe). RSA_* and ECC_* specs are asymmetric keys that a quantum computer could break.',
+    body: 'AWS KMS’s own name for the key type. SYMMETRIC_DEFAULT is a 256-bit AES key (quantum-resistant). RSA_* and ECC_* specs are asymmetric keys that a quantum computer could break.',
   },
   curve: {
     header: 'Elliptic curve',
@@ -53,11 +53,11 @@ export const CRYPTO_FIELD_HELP: Record<string, FieldHelp> = {
   },
   parameterSet: {
     header: 'Parameter set',
-    body: 'The specific parameter choice for an algorithm — for post-quantum algorithms this names the security level (e.g. ML-KEM-768). For classical keys it often just restates the key size.',
+    body: 'The specific parameter choice for an algorithm — for post-quantum algorithms this names the security level (e.g. ML-KEM-768). For traditional keys it often just restates the key size.',
   },
   symmetricStrength: {
     header: 'Symmetric strength',
-    body: 'Our assessment of whether this symmetric key is strong enough to remain safe against a future quantum computer: AES-256 is safe, AES-128 warrants review.',
+    body: 'Our assessment of whether this symmetric key is strong enough to stay strong enough against a future quantum computer: AES-256 is quantum-resistant, AES-128 warrants review.',
     topic: 'pqc',
   },
   classicalSecurityLevel: {
@@ -81,7 +81,7 @@ export const CRYPTO_FIELD_HELP: Record<string, FieldHelp> = {
   },
   signatureAlgorithm: {
     header: 'Signature algorithm',
-    body: 'The algorithm the issuer used to sign the certificate, e.g. SHA256WITHRSA. RSA and ECDSA signatures are not quantum-safe; today AWS does not yet issue post-quantum (ML-DSA) certificates.',
+    body: 'The algorithm the issuer used to sign the certificate, e.g. SHA256WITHRSA. RSA and ECDSA signatures are not quantum-resistant; today AWS does not yet issue post-quantum (ML-DSA) certificates.',
     topic: 'pqc',
   },
   certFormat: {
@@ -121,21 +121,21 @@ export const CRYPTO_FIELD_HELP: Record<string, FieldHelp> = {
   },
   keyExchangeGroup: {
     header: 'Key exchange group',
-    body: 'How the two sides agree on a shared secret to start the encrypted session. A hybrid group like X25519MLKEM768 mixes a classical and a post-quantum algorithm, protecting against “harvest-now, decrypt-later” attacks. "(negotiated)" = actually observed on a live connection; "(supported)" = the policy permits it.',
+    body: 'How the two sides agree on a shared secret to start the encrypted session. A hybrid group like X25519MLKEM768 mixes a traditional and a post-quantum algorithm, protecting against “harvest-now, decrypt-later” attacks. "(negotiated)" = actually observed on a live connection; "(supported)" = the policy permits it.',
     topic: 'pqc',
   },
   pqcHybrid: {
     header: 'PQC hybrid key exchange',
-    body: 'Whether this connection uses a hybrid post-quantum key exchange (a classical algorithm combined with a quantum-safe one like ML-KEM). "PQC hybrid" is the goal state; "Classical" means it is not yet quantum-safe.',
+    body: 'Whether this connection uses a hybrid post-quantum key exchange (a traditional algorithm combined with a quantum-resistant one like ML-KEM). "PQC hybrid" is the goal state for the key exchange — but the certificate is still traditional — full end-to-end PQC also requires an ML-DSA certificate. "Traditional" means it is not yet quantum-resistant.',
     topic: 'pqc',
   },
   certSignatureAlgorithm: {
     header: 'Cert signature algorithm',
-    body: 'The signature algorithm of the certificate this endpoint presents, e.g. SHA256WITHRSA. Resolved from the bound ACM certificate when one exists; these are classical (RSA/ECDSA) today.',
+    body: 'The signature algorithm of the certificate this endpoint presents, e.g. SHA256WITHRSA. Resolved from the bound ACM certificate when one exists; these are traditional (RSA/ECDSA) today.',
   },
   certKeySizeBits: {
     header: 'Cert key size (bits)',
-    body: 'The key size of the endpoint’s certificate, e.g. 2048 for an RSA-2048 cert. Larger RSA keys are stronger against classical attack but none are quantum-safe.',
+    body: 'The key size of the endpoint’s certificate, e.g. 2048 for an RSA-2048 cert. Larger RSA keys are stronger against classical attack but none are quantum-resistant.',
   },
   cipherSuites: {
     header: 'Cipher suites',

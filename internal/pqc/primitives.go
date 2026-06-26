@@ -10,7 +10,7 @@ import (
 // SymmetricStrength is an ADDITIVE classification layered on top of the binary
 // QuantumVulnerable flag. It tiers symmetric/block-cipher primitives by their
 // classical (and Grover-reduced) strength, so the UI can distinguish a
-// quantum-safe AES-256 from an adequate-but-review AES-128 and a
+// quantum-resistant AES-256 from an adequate-but-review AES-128 and a
 // classically-broken 3DES/RC4/DES. It is orthogonal to QuantumVulnerable:
 // asymmetric Shor-broken primitives carry StrengthNA (their problem is the Shor
 // flag, not symmetric strength).
@@ -18,7 +18,7 @@ type SymmetricStrength string
 
 const (
 	// StrengthSafe: AES-256 (or stronger). Grover only halves to ~128-bit
-	// effective; quantum-safe, no action.
+	// effective; quantum-resistant, no action.
 	StrengthSafe SymmetricStrength = "quantum-safe"
 	// StrengthReview: AES-128/192. Adequate today but Grover-reduced margin is
 	// smaller; flag for review / upgrade to AES-256.
@@ -303,7 +303,7 @@ var primitiveAlias = map[string]string{
 	// Fujisaki-Okamoto transform and the public-key/ciphertext encoding, so a
 	// "Kyber768/1024/512" implementation is a transitional/draft scheme, not the
 	// durable, standardized ML-KEM. Auto-aliasing a raw "kyber" label to ML-KEM
-	// would FALSE-SAFE it as quantum-safe standardized PQ. We therefore do NOT
+	// would FALSE-SAFE it as quantum-resistant standardized PQ. We therefore do NOT
 	// map bare "kyber*" here; an isolated "kyber" token falls through to the
 	// conservative unknown/vulnerable default (canonPrimitive returns false ->
 	// the ranker treats it as quantum-vulnerable). Only the AWS hybrid TLS group

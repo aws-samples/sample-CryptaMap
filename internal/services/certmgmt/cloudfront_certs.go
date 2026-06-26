@@ -95,7 +95,7 @@ func (s CloudFrontCertsScanner) scan(ctx context.Context, client cloudfrontCerts
 			// hybrid ML-KEM *key exchange* capability lives on the transit
 			// CloudFrontScanner asset, not here. (Hardcoding PosturePQCHybrid here was
 			// a FALSE-SAFE: it marked classical RSA/ECDSA authentication as
-			// quantum-safe / no-action.)
+			// quantum-resistant / no-action.)
 			services.PostureProperty(&a, models.PostureNonPQCClassical)
 			assets = append(assets, a)
 			if services.TruncationCapReached(len(assets), s.Name(), region) {

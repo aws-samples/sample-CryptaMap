@@ -113,10 +113,10 @@ func (s KMSUsageScanner) scan(ctx context.Context, client kmsUsageAPI, accountID
 				// An alias is a pointer; its TRUE posture is the TARGET KEY's spec.
 				// Hardcoding symmetric-only was a FALSE-SAFE: an alias targeting an
 				// RSA/ECC asymmetric key (e.g. a signing/encryption CMK) would be shown
-				// quantum-safe. Resolve the target key's KeySpec via DescribeKey and
+				// quantum-resistant. Resolve the target key's KeySpec via DescribeKey and
 				// classify with the same kmsSpecPosture used by kms_spec. On failure,
 				// fall back to PostureUnknown (NOT a safe posture) so we never assert a
-				// false quantum-safe state.
+				// false quantum-resistant state.
 				posture := models.PostureUnknown
 				resolved := false
 				if target != "" {
