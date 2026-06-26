@@ -39,11 +39,11 @@ const (
 	// StatusNotEncrypted is an EFFECTIVE-only status (never a matrix row): it is
 	// produced by EffectivePQCStatus for an asset whose posture is no-encryption.
 	// PQC readiness is genuinely not assessable until a cryptographic baseline
-	// exists, so the asset is NEITHER quantum-safe (not-applicable) NOR an
+	// exists, so the asset is NEITHER quantum-resistant (not-applicable) NOR an
 	// awaiting-fix vulnerable asset (not-yet) — it is a prerequisite / data-hygiene
 	// state ("encrypt first"), maturity stage 0. Kept distinct from not-applicable
-	// so a CRITICAL unencrypted resource never shares the quantum-safe "no action"
-	// label, and so it can be excluded from the quantum-safe KPI denominator.
+	// so a CRITICAL unencrypted resource never shares the quantum-resistant "no action"
+	// label, and so it can be excluded from the quantum-resistant KPI denominator.
 	StatusNotEncrypted PQCStatus = "not-encrypted"
 )
 
@@ -100,7 +100,7 @@ var matrix = map[string]SupportEntry{
 		PQCStatus:      StatusAvailable,
 		PQCMechanism:   "ML-DSA digital signatures (FIPS 204) via key specs ML_DSA_44/65/87, signing algorithm ML_DSA_SHAKE_256; separately, hybrid ECDH+ML-KEM (X25519MLKEM768) for TLS to the KMS endpoint",
 		UpgradeEase:    EaseConfigChange,
-		HowToEnable:    "PQ signing: CreateKey with KeySpec=ML_DSA_44|ML_DSA_65|ML_DSA_87, KeyUsage=SIGN_VERIFY; sign with SigningAlgorithm=ML_DSA_SHAKE_256. PQ TLS to endpoint: AwsCrtAsyncHttpClient.builder().postQuantumTlsEnabled(true). NOTE: no ML-KEM *key spec* exists in KMS; data-at-rest under KMS uses AES-256-GCM (SYMMETRIC_DEFAULT), already quantum resistant.",
+		HowToEnable:    "PQ signing: CreateKey with KeySpec=ML_DSA_44|ML_DSA_65|ML_DSA_87, KeyUsage=SIGN_VERIFY; sign with SigningAlgorithm=ML_DSA_SHAKE_256. Hybrid PQ-TLS (ECDH+ML-KEM, X25519MLKEM768) to endpoint: AwsCrtAsyncHttpClient.builder().postQuantumTlsEnabled(true). NOTE: no ML-KEM *key spec* exists in KMS; data-at-rest under KMS uses AES-256-GCM (SYMMETRIC_DEFAULT), already quantum resistant.",
 		Confidence:     ConfHigh,
 		SourceURL:      "https://docs.aws.amazon.com/kms/latest/developerguide/asymmetric-key-specs.html",
 		Notes:          "Verified against live AWS KMS docs (2026-06-03): ML_DSA_44/65/87 key specs and ML_DSA_SHAKE_256 GA; RSA_2048/3072/4096, ECC_NIST_P256/P384/P521, ECC_NIST_EDWARDS25519, ECC_SECG_P256K1, SM2 remain classical/quantum-vulnerable. AES-256-GCM explicitly described by AWS as quantum resistant. ML-DSA GA announced 2025-06-13. In CryptaMap taxonomy this maps to the kms_spec/kms_usage/kms_rotation family (alias 'kms').",
@@ -182,9 +182,9 @@ var matrix = map[string]SupportEntry{
 		DisplayName:    "Amazon CloudFront",
 		CryptoFunction: "data-in-transit",
 		PQCStatus:      StatusHybridTLSOnly,
-		PQCMechanism:   "Quantum-safe (hybrid) key exchange X25519MLKEM768 and SecP256r1MLKEM768 for viewer-to-CloudFront TLS; TLS 1.3 only; negotiated automatically, no separate PQ toggle",
+		PQCMechanism:   "Quantum-resistant (hybrid) key exchange X25519MLKEM768 and SecP256r1MLKEM768 for viewer-to-CloudFront TLS; TLS 1.3 only; negotiated automatically, no separate PQ toggle",
 		UpgradeEase:    EaseAWSManagedAuto,
-		HowToEnable:    "No separate PQ knob. Use a CloudFront security policy that allows TLS 1.3 (e.g. TLSv1.2_2021 or TLSv1.3_2025); quantum-safe groups negotiate automatically when the viewer supports them. TLS 1.2-only viewers cannot use PQ.",
+		HowToEnable:    "No separate PQ knob. Use a CloudFront security policy that allows TLS 1.3 (e.g. TLSv1.2_2021 or TLSv1.3_2025); quantum-resistant groups negotiate automatically when the viewer supports them. TLS 1.2-only viewers cannot use PQ.",
 		Confidence:     ConfHigh,
 		SourceURL:      "https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/secure-connections-supported-viewer-protocols-ciphers.html",
 		Notes:          "Verified verbatim against live CloudFront doc (2026-06-03): supports X25519MLKEM768 and SecP256r1MLKEM768, 'only supported with TLS 1.3'. NOTE: only two groups (no SecP384r1MLKEM1024, unlike ELB). Signature schemes remain classical RSA/ECDSA (no ML-DSA), so authentication is NOT post-quantum. CryptaMap source comment 'PQC-default since 2024' over-asserts the date; the capability is real but tie it to TLS 1.3 negotiation, not a 2024 default.",
@@ -280,7 +280,7 @@ var matrix = map[string]SupportEntry{
 		PQCStatus:      StatusNotApplicable,
 		PQCMechanism:   "AES-256 storage encryption via KMS - symmetric, quantum resistant",
 		UpgradeEase:    EaseAWSManagedAuto,
-		HowToEnable:    "No PQC action for at-rest. For RDS in-transit TLS (rds_transit), PQ key exchange depends on the database engine TLS stack, which AWS does not document as PQ-hybrid; treat transit as classical.",
+		HowToEnable:    "No PQC action for at-rest. For RDS in-transit TLS (rds_transit), PQ key exchange depends on the database engine TLS stack, which AWS does not document as PQ-hybrid; treat transit as traditional (non-PQC).",
 		Confidence:     ConfHigh,
 		SourceURL:      "https://aws.amazon.com/blogs/security/aws-post-quantum-cryptography-migration-plan/",
 		Notes:          "At-rest AES-256 quantum resistant. The separate rds_transit channel is classical (no documented PQ-hybrid); do not flag at-rest as quantum-vulnerable.",
@@ -367,7 +367,7 @@ var matrix = map[string]SupportEntry{
 		HowToEnable:    "No PQ-TLS option documented for these database engines' in-transit channels. Track AWS announcements. (At-rest for these services is AES-256 / quantum-resistant — a SEPARATE asset/row; do not conflate.)",
 		Confidence:     ConfMedium,
 		SourceURL:      "https://aws.amazon.com/blogs/security/aws-post-quantum-cryptography-migration-plan/",
-		Notes:          "Dedicated row so the *_transit scanners do NOT inherit their at-rest sibling's not-applicable status (which would FALSE-SAFE a classical TLS endpoint as quantum-safe). The transit channel is classical; the at-rest row stays not-applicable independently.",
+		Notes:          "Dedicated row so the *_transit scanners do NOT inherit their at-rest sibling's not-applicable status (which would FALSE-SAFE a classical TLS endpoint as quantum-resistant). The transit channel is classical; the at-rest row stays not-applicable independently.",
 	},
 	"s2n_tls": {
 		ServiceKey:     "s2n_tls",
@@ -426,9 +426,9 @@ var serviceAlias = map[string]string{
 	// secretsmanager PQ row.
 	"secrets_rotation": "secretsmanager",
 	// In-transit DB channels map to the dedicated classical db_transit row — NOT
-	// their at-rest sibling (which is not-applicable/quantum-safe AES-256).
+	// their at-rest sibling (which is not-applicable/quantum-resistant AES-256).
 	// Inheriting the at-rest row FALSE-SAFED these classical TLS endpoints as
-	// "quantum-safe — no action" (a vulnerable posture passing through a
+	// "quantum-resistant — no action" (a vulnerable posture passing through a
 	// not-applicable service status in EffectivePQCStatus).
 	"rds_transit":         "db_transit",
 	"aurora_transit":      "db_transit",

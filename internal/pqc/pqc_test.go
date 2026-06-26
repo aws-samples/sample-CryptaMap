@@ -267,13 +267,13 @@ func TestMatrixInvariants(t *testing.T) {
 	}
 }
 
-// TestBareKyberNotQuantumSafe guards the FIPS-203 non-equivalence gap: a bare
+// TestBareKyberNotQuantumResistant guards the FIPS-203 non-equivalence gap: a bare
 // "kyber*" token (pre-standard CRYSTALS-Kyber, which is NOT byte-compatible with
-// FIPS-203 ML-KEM) must NOT be auto-credited as standardized, quantum-safe PQ.
+// FIPS-203 ML-KEM) must NOT be auto-credited as standardized, quantum-resistant PQ.
 // It must fail to resolve (so the ranker treats it conservatively as
 // vulnerable/unknown), while AWS hybrid TLS group names that explicitly carry an
 // ML-KEM half still resolve to a non-vulnerable ML-KEM entry.
-func TestBareKyberNotQuantumSafe(t *testing.T) {
+func TestBareKyberNotQuantumResistant(t *testing.T) {
 	bareKyber := []string{"kyber768", "kyber1024", "kyber512", "Kyber768", "kyber"}
 	for _, name := range bareKyber {
 		if _, ok := canonPrimitive(name); ok {
@@ -281,7 +281,7 @@ func TestBareKyberNotQuantumSafe(t *testing.T) {
 		}
 		e, ok := PrimitiveReadiness(name)
 		if ok {
-			t.Errorf("PrimitiveReadiness(%q) ok=true (%+v); bare Kyber must NOT classify as a known (quantum-safe) primitive", name, e)
+			t.Errorf("PrimitiveReadiness(%q) ok=true (%+v); bare Kyber must NOT classify as a known (quantum-resistant) primitive", name, e)
 		}
 	}
 
@@ -292,7 +292,7 @@ func TestBareKyberNotQuantumSafe(t *testing.T) {
 			t.Fatalf("PrimitiveReadiness(%q) ok=false; standardized ML-KEM group must resolve", name)
 		}
 		if e.QuantumVulnerable {
-			t.Errorf("%q resolved to QuantumVulnerable=true (%+v); standardized ML-KEM must be quantum-safe", name, e)
+			t.Errorf("%q resolved to QuantumVulnerable=true (%+v); standardized ML-KEM must be quantum-resistant", name, e)
 		}
 	}
 }

@@ -103,7 +103,7 @@ func TestRedshiftServerlessScanListErrorPropagates(t *testing.T) {
 // AES-256 with no opt-out, so posture must be SymmetricOnly and MUST NEVER be
 // NoEncryption — even when KmsKeyId is absent (which means the AWS-owned default
 // key, not the absence of encryption). It also asserts the at-rest cipher is the
-// symmetric AES-256 algorithm (quantum-safe), not a quantum-vulnerable primitive.
+// symmetric AES-256 algorithm (quantum-resistant), not a quantum-vulnerable primitive.
 func TestRedshiftServerlessPostureAlwaysSymmetricOnly(t *testing.T) {
 	cases := []struct {
 		name       string
@@ -146,7 +146,7 @@ func TestRedshiftServerlessPostureAlwaysSymmetricOnly(t *testing.T) {
 			if a.Properties["kmsKeyId"] != tc.wantKmsKey {
 				t.Errorf("expected kmsKeyId %q, got %q", tc.wantKmsKey, a.Properties["kmsKeyId"])
 			}
-			// At-rest cipher must be the symmetric AES-256 algorithm (quantum-safe).
+			// At-rest cipher must be the symmetric AES-256 algorithm (quantum-resistant).
 			if a.Properties == nil {
 				t.Fatal("expected asset properties to be populated")
 			}

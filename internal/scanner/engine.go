@@ -372,7 +372,25 @@ func (e *Engine) buildSummary(assets []models.CryptoAsset, findings []models.Fin
 			s.Informational++
 		}
 	}
+	s.InventoryOnly = countInventoryOnly(assets)
 	return s
+}
+
+// countInventoryOnly counts the assets that are recorded for inventory but
+// deliberately NOT emitted as Findings (B3): quantum-resistant-at-rest symmetric
+// AES-256 (PostureSymmetricOnly). This keeps the removed-from-findings assets
+// visibly reconciled so they never vanish silently from the summary.
+func countInventoryOnly(assets []models.CryptoAsset) int {
+	n := 0
+	for _, a := range assets {
+		if a.Properties == nil {
+			continue
+		}
+		if a.Properties["posture"] == string(models.PostureSymmetricOnly) {
+			n++
+		}
+	}
+	return n
 }
 
 func recommendation(p models.CryptoPosture, service string) string {
@@ -382,9 +400,9 @@ func recommendation(p models.CryptoPosture, service string) string {
 	// specific HOW (e.g. the exact ACM/KMS/ELB knob). PQCSupportFor resolves the
 	// asset.Service via serviceAlias; on a miss it returns ok=false and we keep
 	// just the posture guidance. The action is omitted for the no-action quantum-
-	// safe postures, where the posture line is already terminal and a migration
+	// resistant postures, where the posture line is already terminal and a migration
 	// how-to would be misleading.
-	if isQuantumSafeRecommendationPosture(p) {
+	if isQuantumResistantRecommendationPosture(p) {
 		return base
 	}
 	if sup, ok := pqc.PQCSupportFor(service); ok && sup.HowToEnable != "" {
@@ -393,9 +411,9 @@ func recommendation(p models.CryptoPosture, service string) string {
 	return base
 }
 
-// isQuantumSafeRecommendationPosture reports the no-action quantum-safe postures
+// isQuantumResistantRecommendationPosture reports the no-action quantum-resistant postures
 // for which a per-service migration how-to must NOT be appended.
-func isQuantumSafeRecommendationPosture(p models.CryptoPosture) bool {
+func isQuantumResistantRecommendationPosture(p models.CryptoPosture) bool {
 	switch p {
 	case models.PostureSymmetricOnly, models.PosturePQCHybrid, models.PosturePQCReady:
 		return true
@@ -410,11 +428,11 @@ func postureRecommendation(p models.CryptoPosture) string {
 	case models.PostureNoEncryption:
 		return "Enable AES-256 server-side encryption with a customer-managed KMS key."
 	case models.PostureLegacyTLS:
-		return "Migrate to a TLS 1.2+ security policy; prefer the AWS PQ-hybrid policy when available (e.g. ELBSecurityPolicy-TLS13-1-3-PQ-2024-04 once published)."
+		return "Upgrade the listener to a TLS 1.2+ security policy; prefer the AWS PQ-hybrid policy when available (e.g. ELBSecurityPolicy-TLS13-1-3-PQ-2024-04 once published)."
 	case models.PostureNonPQCClassical:
 		return "Plan migration to PQ-hybrid TLS (X25519 + ML-KEM-768) and ML-DSA certificates per CNSA 2.0 deadlines."
 	case models.PostureSymmetricOnly:
-		return "AES-256 / already-PQC at rest is quantum-safe; no PQC migration required — listed for inventory completeness."
+		return "Quantum-resistant at rest (symmetric AES-256) — not a PQC-migration item. Recorded for inventory completeness only; not emitted as a finding and not counted in the headline."
 	case models.PosturePQCHybrid, models.PosturePQCReady:
 		return "PQC-ready posture detected; verify periodically as ciphersuites evolve."
 	}

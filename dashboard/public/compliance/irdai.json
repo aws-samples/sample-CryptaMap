@@ -29,7 +29,7 @@
       "where": "Annexure-III Auditor's Report Checklist, Asset Management (ID.AM) category, row 110",
       "citation": { "sourceFile": "IRDAI-ICSG-2026-AnnexIII-Auditors-Report-Checklist.pdf", "page": 33, "line": 18, "url": "https://irdai.gov.in/web/guest/document-detail?documentId=9189223" },
       "cryptaMapLevel": "DIRECT",
-      "cryptaMapNote": "CryptaMap is precisely the 'up-to-date inventory of cryptographic assets' this audit item asks for, and it surfaces post-quantum readiness (quantum-safe vs not) per asset. Scope honesty: CryptaMap covers the AWS-managed-service crypto surface; the auditor's question spans the whole organisation. It is also an audit-CHECKLIST item (auditors verify it), not a numbered statutory control."
+      "cryptaMapNote": "CryptaMap is precisely the 'up-to-date inventory of cryptographic assets' this audit item asks for, and it surfaces post-quantum readiness (quantum-resistant vs not) per asset. Scope honesty: CryptaMap covers the AWS-managed-service crypto surface; the auditor's question spans the whole organisation. It is also an audit-CHECKLIST item (auditors verify it), not a numbered statutory control."
     }
   ],
   "honestCaveats": [

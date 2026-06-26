@@ -107,7 +107,7 @@ func TestRuntimePosture(t *testing.T) {
 		{"ECC_NIST_EDWARDS25519", models.PostureNonPQCClassical},
 		{"AES_256", models.PostureSymmetricOnly},
 		{"SYMMETRIC_DEFAULT", models.PostureSymmetricOnly},
-		// An unrecognized algorithm is Unknown (honest), never assumed quantum-safe.
+		// An unrecognized algorithm is Unknown (honest), never assumed quantum-resistant.
 		{"unknown-thing", models.PostureUnknown},
 	}
 	for _, tt := range tests {

@@ -166,6 +166,14 @@ func recomputeSummary(s models.ScanResult) models.ScanSummary {
 			sum.Informational++
 		}
 	}
+	// Mirror scanner.buildSummary (B3): reconcile the inventory-only count
+	// (quantum-resistant-at-rest symmetric AES-256, PostureSymmetricOnly) from the
+	// shard's assets so the assets removed from the finding stream do not vanish.
+	for _, a := range s.Assets {
+		if a.Properties != nil && a.Properties["posture"] == string(models.PostureSymmetricOnly) {
+			sum.InventoryOnly++
+		}
+	}
 	return sum
 }
 

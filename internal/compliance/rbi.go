@@ -42,7 +42,7 @@ func (m *RBIMapper) Map(asset models.CryptoAsset, posture models.CryptoPosture) 
 			ControlID:    "CryptaMap→bank.in-Domain",
 			ControlName:  ".bank.in domain migration (RBI Circular RBI/2025-26/28; anti-phishing, non-PQC)",
 			Status:       "informational",
-			Remediation:  "Confirm bank-customer-facing certificates are issued under the .bank.in TLD per RBI Circular RBI/2025-26/28 (deadline 31 Oct 2025). This is a digital-trust requirement, not a quantum-safe one.",
+			Remediation:  "Confirm bank-customer-facing certificates are issued under the .bank.in TLD per RBI Circular RBI/2025-26/28 (deadline 31 Oct 2025). This is a digital-trust requirement, not a quantum-resistant one.",
 			DeadlineDate: "2025-10-31",
 		})
 	}

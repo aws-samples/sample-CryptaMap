@@ -105,7 +105,7 @@ func TestLambdaScanListErrorPropagates(t *testing.T) {
 
 // TestLambdaScanHonestyPosture verifies the scanner's domain honesty: a Lambda
 // function (always TLS-fronted by AWS, never plaintext) must be classified as
-// NonPQCClassical — never a clean/quantum-safe all-clear — and must NOT assert a
+// NonPQCClassical — never a clean/quantum-resistant all-clear — and must NOT assert a
 // concrete served TLS version, because the Function-URL data-plane minimum is
 // undocumented (left UNKNOWN with low-confidence aws-doc provenance), not the
 // control-plane "1.2".

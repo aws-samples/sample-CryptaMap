@@ -353,7 +353,7 @@ func TestRecommendedActionCitation(t *testing.T) {
 }
 
 // TestAssetAwarePQCStatus proves the asset-aware pqcStatus override end-to-end
-// through Build: a quantum-safe asset (symmetric AES-256, or pqc posture) on a
+// through Build: a quantum-resistant asset (symmetric AES-256, or pqc posture) on a
 // service whose matrix row is "not-yet" (s3, ssm) must NEVER present "not-yet";
 // it is promoted to the no-action not-applicable state. A genuinely vulnerable
 // asset on a not-yet service stays not-yet, and a real available/hybrid
@@ -373,8 +373,8 @@ func TestAssetAwarePQCStatus(t *testing.T) {
 	scan := models.ScanResult{
 		AccountID: "acct",
 		Assets: []models.CryptoAsset{
-			mkAsset("s3-aes", "s3", "AES-256-GCM", 256),   // not-yet row, quantum-safe asset
-			mkAsset("ssm-aes", "ssm", "AES-256-GCM", 256), // not-yet row, quantum-safe asset
+			mkAsset("s3-aes", "s3", "AES-256-GCM", 256),   // not-yet row, quantum-resistant asset
+			mkAsset("ssm-aes", "ssm", "AES-256-GCM", 256), // not-yet row, quantum-resistant asset
 			mkAsset("s3-128", "s3", "AES-128", 128),       // AES-128 review-tier symmetric
 			mkAsset("acm-rsa", "acm", "RSA-2048", 2048),   // not-yet acm row, VULNERABLE asset
 			mkAsset("alb-ec", "alb", "ECDHE", 0),          // hybrid-tls-only, must NOT downgrade
@@ -393,11 +393,11 @@ func TestAssetAwarePQCStatus(t *testing.T) {
 		byRes[it.ResourceID] = it
 	}
 
-	// Quantum-safe symmetric assets on not-yet services must be promoted.
+	// Quantum-resistant symmetric assets on not-yet services must be promoted.
 	for _, id := range []string{"s3-aes-res", "ssm-aes-res", "s3-128-res"} {
 		it := byRes[id]
 		if it.PQCStatus == pqc.StatusNotYet {
-			t.Errorf("%s: symmetric quantum-safe asset must NEVER carry not-yet (got %q)", id, it.PQCStatus)
+			t.Errorf("%s: symmetric quantum-resistant asset must NEVER carry not-yet (got %q)", id, it.PQCStatus)
 		}
 		if it.PQCStatus != pqc.StatusNotApplicable {
 			t.Errorf("%s: expected promotion to not-applicable, got %q", id, it.PQCStatus)
@@ -423,7 +423,7 @@ func TestAssetAwarePQCStatus(t *testing.T) {
 
 // Test3DESWeakNeverNotApplicable proves a classically-weak 3DES symmetric asset
 // is tiered weak-replace AND, although symmetric (not Shor-broken), it is NOT
-// silently promoted to a quantum-safe no-action state on a vulnerable-posture
+// silently promoted to a quantum-resistant no-action state on a vulnerable-posture
 // finding — the strength signal is additive, not a free pass. Here 3DES is
 // non-vulnerable to Shor so on a not-yet service it would promote; the test
 // pins the strength tier as the load-bearing weak signal.

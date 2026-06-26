@@ -88,9 +88,21 @@ func statusFromPosture(p models.CryptoPosture) string {
 		return "non-compliant"
 	case models.PostureNonPQCClassical:
 		return "partial"
-	case models.PosturePQCHybrid, models.PosturePQCReady, models.PostureSymmetricOnly:
+	case models.PosturePQCHybrid:
+		// Hybrid PQ key exchange with a TRADITIONAL (RSA/ECDSA) certificate is NOT
+		// fully migrated: the KEM side is quantum-resistant but authentication is
+		// still classical. Report "partial" (hybrid KEX, traditional cert), never
+		// "compliant" — counting it as fully resistant would over-claim against the
+		// signature mandates (e.g. CNSA 2.0 ML-DSA).
+		return "partial"
+	case models.PosturePQCReady, models.PostureSymmetricOnly:
+		// pqc-ready = fully migrated (pure PQC). symmetric-only = AES-256 at rest is
+		// quantum-resistant (Grover-only, not Shor-vulnerable) — not a PQC-migration
+		// item, so it carries no asymmetric obligation to be non-compliant with.
 		return "compliant"
 	default:
+		// PostureUnknown and any unmapped value: never a clean/compliant verdict —
+		// needs investigation.
 		return "informational"
 	}
 }
@@ -108,9 +120,19 @@ func readinessFromPosture(p models.CryptoPosture) string {
 		return "quantum-vulnerable"
 	case models.PostureNonPQCClassical:
 		return "partial"
-	case models.PosturePQCHybrid, models.PosturePQCReady, models.PostureSymmetricOnly:
+	case models.PosturePQCHybrid:
+		// Hybrid PQ key exchange, traditional certificate: the KEM side is
+		// quantum-resistant but authentication is still classical, so the readiness
+		// is "partial" — not the fully-resistant "quantum-safe" signal.
+		return "partial"
+	case models.PosturePQCReady, models.PostureSymmetricOnly:
+		// "quantum-safe" here is the EXEMPT internal evidence-signal value (mirrors
+		// the SecurityHub case match in output/securityhub.go); KEEP the literal.
+		// pqc-ready (pure PQC) and symmetric-only (AES-256 at rest, Grover-only) are
+		// both genuinely quantum-resistant.
 		return "quantum-safe"
 	default:
+		// PostureUnknown and any unmapped value: never a clean verdict.
 		return "informational"
 	}
 }

@@ -175,20 +175,20 @@ func ecrAtRestProps(ctx context.Context, kmsClient ecrImagesAPI, ec *ecrtypes.En
 		}
 		*outSpec = keySpec
 		return services.AESAtRestKMS(keySpec), postureForKeySpec(keySpec)
-	default: // EncryptionTypeAes256 (SSE-S3 managed) or unset -> AES-256, quantum-safe at rest
+	default: // EncryptionTypeAes256 (SSE-S3 managed) or unset -> AES-256, quantum-resistant at rest
 		return services.AESAtRest(), models.PostureSymmetricOnly
 	}
 }
 
 // postureForKeySpec maps an ECR encryption-key KMS KeySpec to a PQC posture.
 // ECR uses only symmetric KMS keys, so the realistic spec is SYMMETRIC_DEFAULT
-// (symmetric-only, quantum-safe at rest). RSA_*/ECC_* are handled defensively as
+// (symmetric-only, quantum-resistant at rest). RSA_*/ECC_* are handled defensively as
 // classical. There is no ML-KEM KMS key spec (the only PQC KMS key type is ML-DSA
 // for signing, which a service-side encryption key never uses), so no PQC branch.
 //
 // A genuinely-unrecognized / future KeySpec must NOT default to symmetric-only:
 // doing so would FALSE-SAFE a new asymmetric (quantum-vulnerable) spec as
-// quantum-safe. Only specs we positively recognize as symmetric (SYMMETRIC_* /
+// quantum-resistant. Only specs we positively recognize as symmetric (SYMMETRIC_* /
 // HMAC_*) are classified PostureSymmetricOnly; anything else is the conservative
 // PostureUnknown. This mirrors keymgmt/kms_spec.go's kmsSpecPosture default.
 func postureForKeySpec(keySpec string) models.CryptoPosture {
@@ -197,7 +197,7 @@ func postureForKeySpec(keySpec string) models.CryptoPosture {
 	case strings.HasPrefix(a, "RSA_"), strings.HasPrefix(a, "ECC_"), strings.HasPrefix(a, "SM2"):
 		return models.PostureNonPQCClassical
 	case strings.HasPrefix(a, "SYMMETRIC"), strings.HasPrefix(a, "HMAC"):
-		// Positively recognized symmetric envelope, quantum-safe at rest.
+		// Positively recognized symmetric envelope, quantum-resistant at rest.
 		return models.PostureSymmetricOnly
 	default:
 		// Unrecognized / future KeySpec: conservative Unknown, never a blind

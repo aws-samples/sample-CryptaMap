@@ -172,7 +172,7 @@ func (s KMSRotationScanner) scan(ctx context.Context, client kmsRotationAPI, acc
 			// NonPQCClassical (quantum-vulnerable), ML_DSA_* -> PQCReady (pure PQC
 			// signature), symmetric/HMAC -> SymmetricOnly. The prior flat
 			// PostureSymmetricOnly false-safed every asymmetric customer-managed key as
-			// quantum-safe.
+			// quantum-resistant.
 			services.PostureProperty(&a, kmsSpecPosture(keySpec))
 			// Posture is driven by a live DescribeKey observation.
 			services.StampObserved(&a, "high")

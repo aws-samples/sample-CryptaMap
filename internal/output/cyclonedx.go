@@ -394,7 +394,7 @@ func knowledgeProvenanceProps() []CDXProperty {
 // negotiated PQ key exchange — only the cloudtrail_evidence scanner does this)
 // from CAPABLE (the endpoint's policy/config PERMITS PQ, but real negotiation is
 // client-dependent and was not observed). Emitted ONLY when the asset is actually
-// PQ-hybrid, so non-PQ assets stay clean. This lets the headline "% quantum-safe"
+// PQ-hybrid, so non-PQ assets stay clean. This lets the headline "% quantum-resistant"
 // honestly report a capable-vs-confirmed split without dropping capable endpoints.
 func pqEvidenceProps(a models.CryptoAsset) []CDXProperty {
 	pp := a.CryptoProps.ProtocolProperties

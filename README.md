@@ -29,9 +29,9 @@ CryptaMap ships a **local-first** React/Cloudscape dashboard: run a scan, then
 surface). The screenshots below show **synthetic demo data**, not a real AWS scan.
 
 <div align="center">
-  <img width="800" alt="CryptaMap dashboard — cryptographic posture overview: total assets, quantum-vulnerable count, quantum-safe %, and one-flip quick wins" src="docs/img/dashboard-overview.png">
+  <img width="800" alt="CryptaMap dashboard — cryptographic posture overview: total assets, quantum-vulnerable count, quantum-resistant %, and one-flip quick wins" src="docs/img/dashboard-overview.png">
   <br>
-  <sub><i>Cryptographic posture at a glance — assets, what's quantum-vulnerable, your quantum-safe %, and how many fixes are one-flip quick wins.</i></sub>
+  <sub><i>Cryptographic posture at a glance — assets, what's quantum-vulnerable, your quantum-resistant %, and how many fixes are one-flip quick wins.</i></sub>
 </div>
 
 ### Try it in two minutes (synthetic data, no AWS account)
@@ -387,7 +387,7 @@ sub-aspect) lives in `internal/taxonomy/taxonomy.go`.
 
 > Already ran AWS's Config PQC-Readiness scanner? See
 > [`docs/PQC-READINESS-CROSSWALK.md`](./docs/PQC-READINESS-CROSSWALK.md) for how
-> CryptaMap's posture / `% quantum-safe` vocabulary lines up with AWS's Tier 1/2/3
+> CryptaMap's posture / `% quantum-resistant` vocabulary lines up with AWS's Tier 1/2/3
 > and NIST's quantum-vulnerable / quantum-resistant terms.
 
 ## What CryptaMap does NOT scan (the absolute list)
@@ -452,7 +452,7 @@ CodeDeploy, Cloud9.
 > Where a service delegates its encryption to S3, EBS, KMS, ACM, or another
 > covered service, that crypto **is** in the CBOM — under the owning service's
 > scanner. Listing the delegating service separately would double-count the same
-> key/certificate and distort the `% quantum-safe` figures. The authoritative,
+> key/certificate and distort the `% quantum-resistant` figures. The authoritative,
 > always-current register (with per-service reasons and the full deferred backlog)
 > is [`docs/COVERAGE-AND-GAPS.md`](./docs/COVERAGE-AND-GAPS.md).
 

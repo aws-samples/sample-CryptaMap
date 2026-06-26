@@ -50,7 +50,7 @@ through the real `BuildFindings` path *and* iterates the **live registry** throu
 full `Engine.Run`. The laws are loop-driven, so scanner names are never hardcoded and
 **a scanner added tomorrow is covered automatically**: every posture is in the valid
 enum, every service resolves to a real taxonomy entry (no `Other` fallback), a
-quantum-safe posture is never escalated by a Mosca/HNDL bump (and a vulnerable one
+quantum-resistant posture is never escalated by a Mosca/HNDL bump (and a vulnerable one
 never drops below its floor), every `no-encryption` asset carries an explanatory note,
 and BOM-refs are unique.
 

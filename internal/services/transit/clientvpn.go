@@ -16,7 +16,7 @@ import (
 // always encrypted — but the handshake is classical (X25519/ECDHE/RSA key
 // exchange and an RSA/ECDSA server cert) with no AWS PQ-hybrid option, so posture
 // is NonPQCClassical (a quantum-migration target, never NoEncryption and never
-// quantum-safe). When the server cert is an ACM cert, its signature algorithm /
+// quantum-resistant). When the server cert is an ACM cert, its signature algorithm /
 // key size are resolved for evidence.
 type ClientVPNScanner struct{}
 

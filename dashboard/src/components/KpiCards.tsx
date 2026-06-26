@@ -9,10 +9,8 @@ interface Props {
   /** Total cryptographic assets in the CBOM. */
   total: number;
   posture: PostureSummary;
-  /** Cryptographic maturity ladder (stage 0/1/2) derived from posture. */
+  /** Honest six-tier crypto breakdown + two derived callouts (see summarizeMaturity). */
   maturity: MaturitySummary;
-  /** PQC-ready or hybrid assets (already quantum-safe key exchange / KEM). */
-  pqcReadyOrHybrid: number;
   /** Number of distinct accounts covered. */
   accounts: number;
   /** Number of distinct regions covered. */
@@ -21,12 +19,6 @@ interface Props {
   scannedAt?: string;
   /** Quick-win count from the roadmap. */
   quickWins: number;
-  /**
-   * Percentage (0-100) of ENCRYPTED assets that are quantum-safe
-   * (stage2 / (stage1+stage2)). Unencrypted (stage 0) and unknown are excluded
-   * from the denominator — see summarizeMaturity.
-   */
-  pqcReadyPct: number;
 }
 
 interface KpiProps {
@@ -65,12 +57,10 @@ export default function KpiCards({
   total,
   posture,
   maturity,
-  pqcReadyOrHybrid,
   accounts,
   regions,
   scannedAt,
   quickWins,
-  pqcReadyPct,
 }: Props) {
   // Coverage is CONTEXT for the metrics (which accounts/regions these numbers
   // cover), not a metric itself — so it rides in the panel header as a caption
@@ -89,51 +79,82 @@ export default function KpiCards({
         </Header>
       }
     >
-      <ColumnLayout columns={4} variant="text-grid">
+      {/* Two honest headline callouts that REPLACE the retired single headline
+          percentage: the prime migration target (% quantum-vulnerable today) and true
+          end-to-end PQC progress (% on PQC end-to-end, hybrid + symmetric-only
+          EXCLUDED). */}
+      <ColumnLayout columns={3} variant="text-grid" borders="vertical">
         <Kpi label="Total assets" value={total} sub="Cryptographic assets inventoried" />
         <Kpi
-          label="Unencrypted"
-          value={maturity.stage0Unencrypted}
-          color={maturity.stage0Unencrypted > 0 ? 'text-status-error' : 'inherit'}
-          sub="Stage 0 — encrypt first (excluded from PQC %)"
+          label="% quantum-vulnerable today"
+          value={`${maturity.quantumVulnerablePct}%`}
+          color={maturity.quantumVulnerablePct > 0 ? 'text-status-warning' : 'inherit'}
+          sub={`Traditional public-key crypto — the prime PQC migration target (of ${maturity.totalClassifiable} classifiable; excl. unknown)`}
         />
         <Kpi
-          label="Encrypted, quantum-vulnerable"
-          value={maturity.stage1Vulnerable}
-          color={maturity.stage1Vulnerable > 0 ? 'text-status-warning' : 'inherit'}
-          sub="Stage 1 — legacy TLS / classical (non-PQC)"
-        />
-        <Kpi
-          label="Quantum-safe"
-          value={maturity.stage2QuantumSafe}
+          label="% on PQC end-to-end"
+          value={`${maturity.pqcEndToEndPct}%`}
           color="text-status-success"
-          sub="Stage 2 — AES-256 / PQC hybrid / PQC ready"
-        />
-        <Kpi
-          label="% quantum-safe"
-          value={`${pqcReadyPct}%`}
-          color="text-status-success"
-          sub={`Stage 2 of ${maturity.encrypted} encrypted (excl. unencrypted & unknown)`}
-        />
-        <Kpi
-          label="PQC-ready / hybrid"
-          value={pqcReadyOrHybrid}
-          color="text-status-success"
-          sub="Already quantum-safe key exchange"
-        />
-        <Kpi
-          label="Unclassified"
-          value={maturity.unknown}
-          color={maturity.unknown > 0 ? 'text-status-warning' : 'inherit'}
-          sub="Posture not assessable — excluded from PQC %"
-        />
-        <Kpi
-          label="Quick-wins available"
-          value={quickWins}
-          color={quickWins > 0 ? 'text-status-success' : 'inherit'}
-          sub={<Link href="/roadmap">One-flip PQC upgrades →</Link>}
+          sub={`Fully migrated to post-quantum cryptography (of ${maturity.total}; hybrid + AES-256-at-rest NOT counted)`}
         />
       </ColumnLayout>
+
+      <Box margin={{ top: 'l' }}>
+        <Box variant="awsui-key-label" margin={{ bottom: 'xs' }}>
+          Crypto posture breakdown
+        </Box>
+        {/* The six tiers map 1:1 onto the existing CryptoPosture enum values
+            (no new enum values). Worst (data hygiene) first → fully migrated. */}
+        <ColumnLayout columns={6} variant="text-grid" borders="vertical">
+          <Kpi
+            label="No encryption"
+            value={maturity.noEncryption}
+            color={maturity.noEncryption > 0 ? 'text-status-error' : 'inherit'}
+            sub="Encrypt first — PQC not yet assessable"
+          />
+          <Kpi
+            label="Quantum-vulnerable (traditional public-key)"
+            value={maturity.quantumVulnerable}
+            color={maturity.quantumVulnerable > 0 ? 'text-status-warning' : 'inherit'}
+            sub="Legacy TLS / traditional RSA-ECC — migrate to PQC"
+          />
+          <Kpi
+            label="Quantum-resistant at rest (symmetric AES-256)"
+            value={maturity.symmetricOnly}
+            color="inherit"
+            sub="AES-256 at rest — inventory, not a PQC-migration item"
+          />
+          <Kpi
+            label="Hybrid PQ key exchange, traditional certificate"
+            value={maturity.pqcHybrid}
+            color="text-status-success"
+            sub="Hybrid KEX in place; certificate still traditional"
+          />
+          <Kpi
+            label="Migrated to post-quantum cryptography"
+            value={maturity.pqcReady}
+            color="text-status-success"
+            sub="Fully PQC end-to-end"
+          />
+          <Kpi
+            label="Unknown / needs investigation"
+            value={maturity.unknown}
+            color={maturity.unknown > 0 ? 'text-status-warning' : 'inherit'}
+            sub="Posture not assessable — needs investigation"
+          />
+        </ColumnLayout>
+      </Box>
+
+      <Box margin={{ top: 'l' }}>
+        <ColumnLayout columns={3} variant="text-grid">
+          <Kpi
+            label="Quick-wins available"
+            value={quickWins}
+            color={quickWins > 0 ? 'text-status-success' : 'inherit'}
+            sub={<Link href="/roadmap">One-flip PQC upgrades →</Link>}
+          />
+        </ColumnLayout>
+      </Box>
     </Container>
   );
 }

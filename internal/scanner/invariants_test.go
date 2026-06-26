@@ -22,7 +22,7 @@ package scanner
 //	I2  Every asset has a non-empty Service that resolves to a taxonomy.Entry with
 //	    AWSCategory != "Other" and a non-empty CryptoFunction.
 //	I3  Every finding from BuildFindings has a severity consistent with its posture:
-//	    a quantum-safe posture (symmetric-only / pqc-hybrid / pqc-ready) is NEVER
+//	    a quantum-resistant posture (symmetric-only / pqc-hybrid / pqc-ready) is NEVER
 //	    CRITICAL/HIGH purely from a Mosca/HNDL escalation (the H1 rule).
 //	I4  A no-encryption asset always carries an explanatory note property — never a
 //	    bare, context-free no-encryption verdict.
@@ -91,9 +91,21 @@ func deterministicMockResult(t *testing.T) ([]models.CryptoAsset, []models.Findi
 	if len(assets) == 0 {
 		t.Fatalf("deterministic mock produced 0 assets; the suite would assert nothing")
 	}
-	if len(findings) != len(assets) {
-		t.Fatalf("BuildFindings produced %d findings for %d assets; expected one finding per asset",
-			len(findings), len(assets))
+	// B3 at-rest INVENTORY-ONLY: symmetric-only (quantum-resistant at rest)
+	// assets are recorded for inventory but NOT emitted as findings, so the
+	// invariant is one finding per NON-symmetric-only asset (not per asset).
+	inventoryOnly := 0
+	for _, a := range assets {
+		if a.Properties != nil && a.Properties["posture"] == string(models.PostureSymmetricOnly) {
+			inventoryOnly++
+		}
+	}
+	if want := len(assets) - inventoryOnly; len(findings) != want {
+		t.Fatalf("BuildFindings produced %d findings for %d assets (%d inventory-only symmetric); expected %d (one per non-symmetric-only asset)",
+			len(findings), len(assets), inventoryOnly, want)
+	}
+	if inventoryOnly == 0 {
+		t.Fatalf("deterministic mock produced 0 symmetric-only assets; the B3 inventory-vs-finding split would not be exercised")
 	}
 	return assets, findings
 }
@@ -170,19 +182,19 @@ func TestInvariant_ServiceResolvesTaxonomy(t *testing.T) {
 	}
 }
 
-// TestInvariant_QuantumSafeNeverEscalated (I3) asserts every finding's severity is
-// consistent with its posture, focusing on the H1 rule: a quantum-SAFE posture
+// TestInvariant_QuantumResistantNeverEscalated (I3) asserts every finding's severity is
+// consistent with its posture, focusing on the H1 rule: a quantum-RESISTANT posture
 // (symmetric-only / pqc-hybrid / pqc-ready) must NEVER be CRITICAL or HIGH. Those
 // postures map to INFORMATIONAL by posture alone; the only way they could become
 // CRITICAL/HIGH is a posture-blind Mosca/HNDL escalation, which BuildFindings is
 // supposed to suppress. This is the systemic guard that a future regression in the
 // "take the worse of posture- and Mosca-severity" fold cannot over-alarm
-// already-quantum-safe cryptography.
+// already-quantum-resistant cryptography.
 //
 // It also asserts the floor for genuinely-vulnerable postures (no-encryption =>
 // at least HIGH, legacy-tls => at least MEDIUM) so the same fold cannot SILENTLY
 // under-alarm a real risk either.
-func TestInvariant_QuantumSafeNeverEscalated(t *testing.T) {
+func TestInvariant_QuantumResistantNeverEscalated(t *testing.T) {
 	_, findings := deterministicMockResult(t)
 
 	for _, f := range findings {
@@ -190,17 +202,17 @@ func TestInvariant_QuantumSafeNeverEscalated(t *testing.T) {
 			t.Errorf("finding %s (%s): posture %q not in the 7-value enum", f.ResourceID, f.Service, f.Posture)
 			continue
 		}
-		if risk.IsQuantumSafePosture(f.Posture) {
+		if risk.IsQuantumResistantPosture(f.Posture) {
 			switch f.Severity {
 			case models.SeverityCritical, models.SeverityHigh:
-				t.Errorf("finding %s (service=%s posture=%s) escalated to %s; a quantum-safe posture must never be CRITICAL/HIGH (H1 rule — Mosca/HNDL must not raise it)",
+				t.Errorf("finding %s (service=%s posture=%s) escalated to %s; a quantum-resistant posture must never be CRITICAL/HIGH (H1 rule — Mosca/HNDL must not raise it)",
 					f.ResourceID, f.Service, f.Posture, f.Severity)
 			}
 		}
 		// Under-alarm floor: a vulnerable posture must keep at least its posture
 		// severity even after the fold.
 		postureFloor := risk.SeverityFromPosture(f.Posture)
-		if !risk.IsQuantumSafePosture(f.Posture) {
+		if !risk.IsQuantumResistantPosture(f.Posture) {
 			if models.NormalizedSeverity(f.Severity) < models.NormalizedSeverity(postureFloor) {
 				t.Errorf("finding %s (service=%s posture=%s) severity=%s is BELOW the posture floor %s (silent under-alarm)",
 					f.ResourceID, f.Service, f.Posture, f.Severity, postureFloor)
@@ -324,9 +336,9 @@ func TestInvariant_LiveRegistryResolvesTaxonomy(t *testing.T) {
 // network I/O): Engine.Run -> buildFindings -> buildSummary. Even though each
 // scanner errors out network-free under the guard (so few/zero assets are
 // produced), this proves the engine-produced findings — whatever assets DO flow
-// through — obey the posture-enum and quantum-safe-severity laws. It is the
+// through — obey the posture-enum and quantum-resistant-severity laws. It is the
 // systemic guard that the engine's finding-build path itself never emits an
-// out-of-enum posture or an over-escalated quantum-safe finding for ANY current or
+// out-of-enum posture or an over-escalated quantum-resistant finding for ANY current or
 // future registered scanner.
 func TestInvariant_LiveRegistryEngineFindingsHonest(t *testing.T) {
 	reg := testRegistry()
@@ -341,10 +353,10 @@ func TestInvariant_LiveRegistryEngineFindingsHonest(t *testing.T) {
 		if !validPostures[f.Posture] {
 			t.Errorf("engine finding %s (%s): posture %q not in the 7-value enum", f.ResourceID, f.Service, f.Posture)
 		}
-		if risk.IsQuantumSafePosture(f.Posture) {
+		if risk.IsQuantumResistantPosture(f.Posture) {
 			switch f.Severity {
 			case models.SeverityCritical, models.SeverityHigh:
-				t.Errorf("engine finding %s (service=%s posture=%s) escalated to %s; quantum-safe posture must never be CRITICAL/HIGH",
+				t.Errorf("engine finding %s (service=%s posture=%s) escalated to %s; quantum-resistant posture must never be CRITICAL/HIGH",
 					f.ResourceID, f.Service, f.Posture, f.Severity)
 			}
 		}

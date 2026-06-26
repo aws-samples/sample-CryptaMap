@@ -39,12 +39,12 @@ function ProportionBar({
   const segments: Array<{ count: number; color: string; title: string }> = [
     { count: actNow, color: '#d91515', title: `${actNow} need action now` },
     { count: planWatch, color: '#0972d3', title: `${planWatch} no fix available yet` },
-    { count: noAction, color: '#037f0c', title: `${noAction} already quantum-safe` },
+    { count: noAction, color: '#037f0c', title: `${noAction} already quantum-resistant` },
   ];
   return (
     <div
       role="img"
-      aria-label={`${actNow} need action now, ${planWatch} no fix yet, ${noAction} already quantum-safe`}
+      aria-label={`${actNow} need action now, ${planWatch} no fix yet, ${noAction} already quantum-resistant`}
       style={{
         display: 'flex',
         width: '100%',
@@ -167,7 +167,7 @@ export default function RoadmapView() {
           <SpaceBetween size="m">
             <Box variant="p">
               Of {total} assets: <strong>{actNow.length}</strong> need action now ·{' '}
-              <strong>{noAction.length}</strong> already quantum-safe ·{' '}
+              <strong>{noAction.length}</strong> already quantum-resistant ·{' '}
               <strong>{planWatch.length}</strong> have no fix available yet.
             </Box>
             <ProportionBar
@@ -180,7 +180,7 @@ export default function RoadmapView() {
               items={[
                 { label: 'Total assets', value: String(total) },
                 { label: 'Act now', value: String(actNow.length) },
-                { label: 'Already safe', value: String(noAction.length) },
+                { label: 'Already quantum-resistant', value: String(noAction.length) },
                 { label: 'No fix yet', value: String(planWatch.length) },
               ]}
             />
@@ -234,11 +234,11 @@ export default function RoadmapView() {
           />
         </ExpandableSection>
 
-        {/* 4) ALREADY QUANTUM-SAFE — demoted, collapsed, informational. */}
+        {/* 4) ALREADY QUANTUM-RESISTANT — demoted, collapsed, informational. */}
         <ExpandableSection
           variant="container"
           defaultExpanded={false}
-          headerText="Already quantum-safe — no action needed"
+          headerText="Already quantum-resistant — no action needed"
           headerCounter={`(${noAction.length})`}
           headerDescription="AES-256 symmetric encryption at rest is already quantum-resistant — there is no asymmetric exposure to migrate, so no PQC action is required."
         >
@@ -249,7 +249,7 @@ export default function RoadmapView() {
             onSelect={handleSelect}
             empty={
               <Box textAlign="center" color="text-status-inactive" padding="m">
-                No already-quantum-safe assets in this scan.
+                No already-quantum-resistant assets in this scan.
               </Box>
             }
           />

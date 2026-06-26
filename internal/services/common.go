@@ -134,7 +134,7 @@ func AESAtRestKMS(keySpec string) models.CryptoProperties {
 // encryption uses AES-256-XTS (two 256-bit keys / 512-bit total), NOT AES-256-GCM
 // — per the AWS KMS Cryptographic Details doc ("Each volume is encrypted using
 // AES-256-XTS"). XTS is the disk/block-encryption mode; using the GCM helper for
-// EBS mislabels the at-rest cipher mode. Still symmetric AES-256 (quantum-safe).
+// EBS mislabels the at-rest cipher mode. Still symmetric AES-256 (quantum-resistant).
 func AESXTSAtRest() models.CryptoProperties {
 	return models.CryptoProperties{
 		AssetType: models.AssetTypeAlgorithm,

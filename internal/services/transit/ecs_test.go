@@ -99,7 +99,7 @@ func TestECSScanListClustersErrorPropagates(t *testing.T) {
 // scanner records the AWS-documented TLS 1.2 floor (a real transport guarantee,
 // never a no-encryption / clean-bypass posture) and classifies the cluster's
 // classical TLS as NonPQCClassical (RSA/ECDHE handshake without ML-KEM is NOT
-// quantum-safe and must not read as already-PQC or unencrypted).
+// quantum-resistant and must not read as already-PQC or unencrypted).
 func TestECSScanHonestyPosture(t *testing.T) {
 	const arn = "arn:aws:ecs:us-east-1:111122223333:cluster/prod"
 	client := &fakeECSClient{

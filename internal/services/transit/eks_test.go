@@ -115,9 +115,9 @@ func TestEKSScanHonestyPosture(t *testing.T) {
 	if posture != string(models.PostureNonPQCClassical) {
 		t.Errorf("expected posture %q (TLS 1.2 floor, classical KEX), got %q", models.PostureNonPQCClassical, posture)
 	}
-	// Must NOT masquerade as quantum-safe or as plaintext.
+	// Must NOT masquerade as quantum-resistant or as plaintext.
 	if posture == string(models.PosturePQCHybrid) || posture == string(models.PosturePQCReady) {
-		t.Errorf("EKS control-plane TLS is classical; must not be classified quantum-safe, got %q", posture)
+		t.Errorf("EKS control-plane TLS is classical; must not be classified quantum-resistant, got %q", posture)
 	}
 	if posture == string(models.PostureNoEncryption) {
 		t.Errorf("EKS endpoint is TLS-protected; must not be classified no-encryption, got %q", posture)

@@ -161,9 +161,9 @@ func TestFuzzKeyMgmtScannerInvariants(t *testing.T) {
 // future-AWS-influenced) and must NEVER panic and NEVER false-safe an
 // unrecognized spec to symmetric-only / PQC: any spec it does not positively
 // recognize as symmetric (SYMMETRIC_*/HMAC_*) or PQC (ML_DSA) must classify as
-// Unknown or NonPQCClassical — never a fabricated quantum-safe verdict. This is
+// Unknown or NonPQCClassical — never a fabricated quantum-resistant verdict. This is
 // the exact false-safe trap the honesty contract calls out (a new asymmetric
-// spec must not silently read as quantum-safe).
+// spec must not silently read as quantum-resistant).
 func FuzzKMSSpecPosture(f *testing.F) {
 	seeds := []string{
 		"", "SYMMETRIC_DEFAULT", "HMAC_256", "RSA_2048", "RSA_4096",
@@ -200,7 +200,7 @@ func FuzzKMSSpecPosture(f *testing.F) {
 		recognizedPQC := contains(up, "ML_DSA")
 
 		if p == models.PostureSymmetricOnly && !recognizedSymmetric {
-			t.Fatalf("kmsSpecPosture FALSE-SAFE: spec %q classified symmetric-only without a SYMMETRIC_/HMAC_ prefix (a new asymmetric spec could be silently called quantum-safe)", keySpec)
+			t.Fatalf("kmsSpecPosture FALSE-SAFE: spec %q classified symmetric-only without a SYMMETRIC_/HMAC_ prefix (a new asymmetric spec could be silently called quantum-resistant)", keySpec)
 		}
 		if (p == models.PosturePQCReady || p == models.PosturePQCHybrid) && !recognizedPQC {
 			t.Fatalf("kmsSpecPosture fabricated a PQC verdict %q for spec %q without an ML_DSA token", p, keySpec)

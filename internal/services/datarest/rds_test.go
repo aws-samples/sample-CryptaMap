@@ -100,7 +100,7 @@ func TestRDSScanErrorPropagates(t *testing.T) {
 
 // TestRDSScanPostureHonesty verifies the at-rest posture mapping for RDS, whose
 // storage encryption is OPT-IN (off by default):
-//   - encrypted instance -> SymmetricOnly (AES at-rest, quantum-safe), never NoEncryption
+//   - encrypted instance -> SymmetricOnly (AES at-rest, quantum-resistant), never NoEncryption
 //   - genuinely-unencrypted instance -> NoEncryption (correct, not a false all-clear)
 //   - a present CMK KmsKeyId is recorded on the encrypted asset
 func TestRDSScanPostureHonesty(t *testing.T) {
@@ -126,7 +126,7 @@ func TestRDSScanPostureHonesty(t *testing.T) {
 		t.Fatal("expected encrypted instance asset")
 	}
 	if got := enc.Properties["posture"]; got != string(models.PostureSymmetricOnly) {
-		t.Errorf("encrypted instance: expected posture %q (AES at-rest, quantum-safe), got %q", models.PostureSymmetricOnly, got)
+		t.Errorf("encrypted instance: expected posture %q (AES at-rest, quantum-resistant), got %q", models.PostureSymmetricOnly, got)
 	}
 	if got := enc.Properties["posture"]; got == string(models.PostureNoEncryption) {
 		t.Errorf("encrypted instance must NOT be classified no-encryption")

@@ -237,7 +237,7 @@ func TestEffectivePQCStatusCartesianUnchanged(t *testing.T) {
 				switch {
 				case p == models.PostureNoEncryption:
 					want = StatusNotEncrypted
-				case isQuantumSafePosture(p):
+				case isQuantumResistantPosture(p):
 					want = StatusNotApplicable
 				case s != StatusNotYet:
 					want = s

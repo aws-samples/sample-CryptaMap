@@ -25,18 +25,18 @@ export function PostureLegendContent() {
         <Box variant="small">Unencrypted — fix first, regardless of quantum.</Box>
         <StatusIndicator type="error">Legacy TLS</StatusIndicator>
         <Box variant="small">TLS ≤ 1.1 — upgrade to TLS 1.2/1.3 first.</Box>
-        <StatusIndicator type="warning">Classical (non-PQC)</StatusIndicator>
+        <StatusIndicator type="warning">Traditional (non-PQC)</StatusIndicator>
         <Box variant="small">
           Public-key crypto (RSA/ECC) that a quantum computer would break — the
           migration target.
         </Box>
         <StatusIndicator type="success">Symmetric only</StatusIndicator>
         <Box variant="small">
-          AES-256 / symmetric — already quantum-safe, no key-exchange migration.
+          AES-256 / symmetric — already quantum-resistant, no key-exchange migration.
         </Box>
         <StatusIndicator type="success">PQC hybrid / PQC ready</StatusIndicator>
         <Box variant="small">
-          Post-quantum key exchange already in use — already safe.
+          Post-quantum key exchange already in use — already quantum-resistant.
         </Box>
       </SpaceBetween>
     </SpaceBetween>
@@ -74,7 +74,7 @@ export function MoscaContent() {
 
 /**
  * PQC status explainer — the load-bearing distinction between "no action"
- * (already safe) and "not yet" (needs PQC, none shipped).
+ * (already quantum-resistant) and "not yet" (needs PQC, none shipped).
  */
 export function PqcStatusContent() {
   return (
@@ -84,9 +84,9 @@ export function PqcStatusContent() {
         <Box variant="small">
           A post-quantum option exists today — you <strong>should</strong> enable it.
         </Box>
-        <StatusIndicator type="success">Quantum-safe — no action</StatusIndicator>
+        <StatusIndicator type="success">Quantum-resistant — no action</StatusIndicator>
         <Box variant="small">
-          The asset is <strong>already</strong> quantum-safe (symmetric AES-256 or PQC
+          The asset is <strong>already</strong> quantum-resistant (symmetric AES-256 or PQC
           hybrid/ready). Nothing to do.
         </Box>
         <StatusIndicator type="warning">Not yet available</StatusIndicator>
@@ -96,7 +96,7 @@ export function PqcStatusContent() {
         </Box>
       </SpaceBetween>
       <Box variant="small" color="text-status-inactive">
-        Do not confuse "no action" (already safe) with "not yet" (needs it, none
+        Do not confuse "no action" (already quantum-resistant) with "not yet" (needs it, none
         shipped) {DASH} they are opposites.
       </Box>
     </SpaceBetween>

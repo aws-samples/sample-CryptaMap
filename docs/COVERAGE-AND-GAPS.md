@@ -107,12 +107,12 @@ ec2keypairs, cognito (RS256 token-signing).
 
 **Certificates & signing (10):** acm, acmpca, cloudfront_certs, cloudfront_keygroups,
 iam_certs, iot_certs, rolesanywhere, signer, (transferfamily SSH keys), ses_dkim
-(SESv2 GetEmailIdentity — classical RSA DKIM → NonPQCClassical), appstream_certauth
-(DescribeDirectoryConfigs CertificateBasedAuthProperties → classical X.509 trust).
+(SESv2 GetEmailIdentity — traditional RSA DKIM → NonPQCClassical), appstream_certauth
+(DescribeDirectoryConfigs CertificateBasedAuthProperties → traditional X.509 trust).
 
 **SDK / library evidence (3):** lambda_runtime, ec2_ssm, and SDK-version inference.
 
-**Runtime evidence (1):** cloudtrail_evidence (observed PQ-TLS / KMS ops).
+**Runtime evidence (1):** cloudtrail_evidence (observed hybrid PQ-TLS (ML-KEM key exchange) / KMS ops).
 
 _*Some services appear in multiple dimensions (transit + at-rest); counted once per dimension._
 

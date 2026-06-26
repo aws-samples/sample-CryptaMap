@@ -168,7 +168,7 @@ The results bucket and scans table (`DataStack`) are encrypted with a customer-m
 
 ## 5. Why the serving layer has no anonymous data path (and how it's enforced)
 
-CryptaMap's output is the HNDL target list described in Section 1 — an attacker's shopping list of which resources are not quantum-safe. The serving layer is therefore designed around a single rule: **a deployment exposes no internet-facing surface to read the inventory from at all, and the only supported viewer runs on loopback.** This section states why that is the right design, and where the code enforces it.
+CryptaMap's output is the HNDL target list described in Section 1 — an attacker's shopping list of which resources are not quantum-resistant. The serving layer is therefore designed around a single rule: **a deployment exposes no internet-facing surface to read the inventory from at all, and the only supported viewer runs on loopback.** This section states why that is the right design, and where the code enforces it.
 
 **Why "no surface" beats "an authenticated surface."** An earlier design exposed a query API behind an `AWS_IAM` authorizer and deliberately streamed bytes through the authorized Lambda rather than minting an anonymous presigned-S3 URL (a presigned URL is signature-authenticated *but anonymously fetchable*, so it would bypass front-door auth). Rather than carry the ongoing burden of keeping that surface locked down, the local-first redesign **removed the surface entirely** — no API, no presigned path, no CORS question to get wrong. The inventory is simply not reachable over the network from the deployed stack.
 
@@ -205,7 +205,7 @@ The local dashboard server binds to `127.0.0.1` **only**, by hard invariant — 
 
 ### 6.3 Air-gap-baked knowledge (classification needs no network)
 
-CryptaMap classifies crypto from **baked-in baseline knowledge**, so a scan never needs to phone home to a documentation oracle to decide whether something is quantum-safe:
+CryptaMap classifies crypto from **baked-in baseline knowledge**, so a scan never needs to phone home to a documentation oracle to decide whether something is quantum-resistant:
 
 - The PQC knowledge baseline is embedded into the binary via `go:embed data/pqc-knowledge.json` — described as "the air-gap floor: the binary classifies correctly with zero network/doc access" (`internal/pqc/embed.go:5-11`).
 - At runtime the loader parses the embedded default first and only *optionally* overlays a validated, newer on-disk override (env-gated `CRYPTAMAP_KNOWLEDGE_FILE` / `CRYPTAMAP_KNOWLEDGE_DIR`); absent/invalid/older → the embedded default stands. There is no implicit filesystem scan and no network fetch (`internal/pqc/knowledge.go:243-298`). The load path "never opens a socket or spawns a process" (`internal/pqc/knowledge.go:36-37`).

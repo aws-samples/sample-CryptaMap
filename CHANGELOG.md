@@ -59,10 +59,10 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/).
 These changes landed during internal review rounds (cross-validation review and a
 comprehensive code review of ~100 findings). Highlights:
 
-- **Severity reclassification (correction, not new risk):** quantum-safe AES-256
+- **Severity reclassification (correction, not new risk):** quantum-resistant AES-256
   assets are no longer over-alarmed as Critical/High. The drop in Critical/High
   counts reflects removing over-counted safe assets, not hidden risk — severity is
-  gated on `risk.IsQuantumSafePosture`.
+  gated on `risk.IsQuantumResistantPosture`.
 - API-pagination and error-propagation fixes so a denied/throttled scan is VISIBLY
   incomplete rather than a silent empty success.
 - CycloneDX CBOM made schema-valid for both single and merged (org) output.

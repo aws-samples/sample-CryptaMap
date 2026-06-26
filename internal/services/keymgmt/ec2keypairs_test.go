@@ -68,7 +68,7 @@ func TestEC2KeyPairsScanErrorPropagates(t *testing.T) {
 // TestEC2KeyPairsScanClassifiesAndIsHonest verifies the honesty posture for the
 // SSH key-inventory domain: EVERY discovered key pair (RSA, Ed25519, and even a
 // key whose type the API didn't report) must be flagged NonPQCClassical — never
-// no-encryption and never quantum-safe. The unreported-type key must carry the
+// no-encryption and never quantum-resistant. The unreported-type key must carry the
 // classical-unknown note rather than being silently treated as safe. A key pair
 // missing its KeyPairId is skipped (cannot identify the resource), but valid
 // siblings still emit.
@@ -110,7 +110,7 @@ func TestEC2KeyPairsScanClassifiesAndIsHonest(t *testing.T) {
 		t.Fatalf("expected 3 assets (rsa, ed25519, unknown-type; orphan skipped), got %d", len(assets))
 	}
 
-	// Every key pair must be NonPQCClassical — never no-encryption, never quantum-safe.
+	// Every key pair must be NonPQCClassical — never no-encryption, never quantum-resistant.
 	for _, a := range assets {
 		posture := a.Properties["posture"]
 		if posture != string(models.PostureNonPQCClassical) {
@@ -152,7 +152,7 @@ func TestEC2KeyPairsScanClassifiesAndIsHonest(t *testing.T) {
 	}
 
 	// Unreported KeyType: classical-unknown with explanatory note, NOT silently
-	// treated as quantum-safe and NOT given a fabricated keyType.
+	// treated as quantum-resistant and NOT given a fabricated keyType.
 	unk, ok := ec2keypairsAssetByID(assets, "key-unknown")
 	if !ok {
 		t.Fatal("expected an asset for key-unknown")

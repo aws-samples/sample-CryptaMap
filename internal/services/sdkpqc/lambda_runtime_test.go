@@ -155,7 +155,7 @@ func TestLambdaRuntimeScanHonestUnknownPosture(t *testing.T) {
 		t.Errorf("runtime metadata must NOT be reported as no-encryption: %q", got)
 	}
 	if got := a.Properties["posture"]; got == string(models.PosturePQCReady) || got == string(models.PosturePQCHybrid) {
-		t.Errorf("runtime string must NOT be inferred as quantum-safe: %q", got)
+		t.Errorf("runtime string must NOT be inferred as quantum-resistant: %q", got)
 	}
 	// Runtime metadata we CAN observe must be carried faithfully.
 	if a.Properties["runtime"] != "python3.12" {

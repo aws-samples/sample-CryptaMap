@@ -156,13 +156,13 @@ func classifySESDKIM(accountID, region, name string, identityType sesv2types.Ide
 		if dkim.SigningAttributesOrigin == sesv2types.DkimSigningAttributesOriginExternal {
 			custody = "BYODKIM (EXTERNAL): customer-supplied DKIM key"
 		}
-		a.Properties["note"] = "SES DKIM signs email with a classical RSA signature (" + keyLenOrDefault(keyLen) + ", quantum-vulnerable under Shor); no post-quantum DKIM option exists today. Key custody: " + custody + "."
+		a.Properties["note"] = "SES DKIM signs email with a traditional RSA signature (" + keyLenOrDefault(keyLen) + ", quantum-vulnerable under Shor); no post-quantum DKIM option exists today. Key custody: " + custody + "."
 	} else {
 		// Signing disabled: no active signature surface to migrate. Not a
 		// finding, and never no-encryption (DKIM is signing, not encryption).
 		services.PostureProperty(&a, models.PostureUnknown)
 		services.StampObserved(&a, "high")
-		a.Properties["note"] = "SES DKIM signing is NOT enabled for this identity (no active signature surface). DKIM is sender authentication (signing), not encryption; when enabled it uses classical RSA."
+		a.Properties["note"] = "SES DKIM signing is NOT enabled for this identity (no active signature surface). DKIM is sender authentication (signing), not encryption; when enabled it uses traditional RSA."
 	}
 	return a
 }

@@ -239,7 +239,7 @@ const ACTION_COLUMN: TableProps.ColumnDefinition<RoadmapItem> = {
 };
 
 // columnsForTier returns the column set for a tier. The no-action ("Safe") table
-// is informational — uniformly quantum-safe — so it omits the Rank and Priority
+// is informational — uniformly quantum-resistant — so it omits the Rank and Priority
 // (tier urgency) columns.
 function columnsForTier(tier: RoadmapTier): TableProps.ColumnDefinition<RoadmapItem>[] {
   if (tier === 'no-action') {
@@ -280,7 +280,7 @@ interface Props {
 }
 
 // RoadmapTable is a presentational ranked table used by all three roadmap tier
-// sections (Act now / Plan-Watch / Already quantum-safe). The caller supplies
+// sections (Act now / Plan-Watch / Already quantum-resistant). The caller supplies
 // the (already-partitioned, already-ranked) item slice plus its tier.
 export default function RoadmapTable({
   items,

@@ -57,9 +57,9 @@ export async function fetchLatestCBOM(): Promise<CBOM | null> {
 // Overview KPI band + maturity ladder render WITHOUT downloading the full
 // (possibly tens-of-MB) CBOM. It mirrors the backend mergeSummary shape
 // (cmd/cryptamap/lambda_merge_core.go): the counts the dashboard needs plus the
-// completion-barrier signal. perPosture / quantumSafePct are OPTIONAL — when the
-// backend omits the posture rollup, callers fall back to computing it from the
-// CBOM (mock mode always derives them; see fetchSummary).
+// completion-barrier signal. perPosture / the two headline callouts are OPTIONAL —
+// when the backend omits the posture rollup, callers fall back to computing it from
+// the CBOM (mock mode always derives them; see fetchSummary).
 export interface SummaryAccount {
   accountId: string;
   regions: number;
@@ -81,8 +81,21 @@ export interface Summary {
   perAccount: SummaryAccount[];
   /** Per-posture component counts keyed by the cryptamap:posture wire value. */
   perPosture?: Record<string, number>;
-  /** stage2 / encrypted, 0-100 (matches summarizeMaturity.quantumSafePct). */
-  quantumSafePct?: number;
+  /**
+   * Share (0-100) of CLASSIFIABLE assets still on quantum-vulnerable traditional
+   * public-key crypto = (legacyTLS+nonPQCClassical)/classifiable (Unknown excluded
+   * from the denominator). Matches summarizeMaturity.quantumVulnerablePct and the
+   * backend mergeSummary.quantumVulnerablePct.
+   */
+  quantumVulnerablePct?: number;
+  /**
+   * Share (0-100) of ALL assets fully migrated to post-quantum cryptography
+   * end-to-end = pqcReady/total. Hybrid PQ key exchange with a traditional
+   * certificate (pqcHybrid) is EXCLUDED from the numerator, and symmetric-only
+   * AES-256 at rest is not PQC. Matches summarizeMaturity.pqcEndToEndPct and the
+   * backend mergeSummary.pqcEndToEndPct.
+   */
+  pqcEndToEndPct?: number;
   // Completion barrier (SCALING.md §4.4): missingShards>0 / complete=false flags a
   // decimated run so the dashboard never reports a clean, silently-smaller result.
   expectedShards: number;
@@ -101,7 +114,7 @@ export interface Summary {
 // fetchSummary returns the precomputed org rollup. In mock mode (or with no
 // apiBase) there is no /summary artifact, so derive an equivalent rollup from the
 // mock CBOM exactly as the Overview did before — including the per-posture counts
-// and quantumSafePct — and report complete=true (a single local CBOM is, by
+// and the two headline callouts — and report complete=true (a single local CBOM is, by
 // definition, the whole "scan"). The live path GETs ${apiBase}/summary, which —
 // like /cbom — may 302-redirect to a presigned S3 URL; fetch() follows it.
 export async function fetchSummary(): Promise<Summary | null> {
@@ -148,7 +161,8 @@ export function summaryFromCBOM(cbom: CBOM): Summary {
     totalCritical,
     perAccount: Array.from(perAccount.values()),
     perPosture,
-    quantumSafePct: maturity.quantumSafePct,
+    quantumVulnerablePct: maturity.quantumVulnerablePct,
+    pqcEndToEndPct: maturity.pqcEndToEndPct,
     // A local single CBOM is the whole scan by definition: no shard barrier.
     expectedShards: 0,
     observedShards: 0,

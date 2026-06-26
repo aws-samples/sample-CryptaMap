@@ -14,7 +14,14 @@ func (m *MITREMapper) Map(asset models.CryptoAsset, posture models.CryptoPosture
 	switch posture {
 	case models.PostureNoEncryption, models.PostureLegacyTLS, models.PostureNonPQCClassical:
 		pqcNeeds = "Needs Attention"
-	case models.PosturePQCHybrid, models.PosturePQCReady, models.PostureSymmetricOnly:
+	case models.PosturePQCHybrid:
+		// Hybrid PQ key exchange with a traditional certificate: KEM migrated, but
+		// the signature/authentication side is still classical, so the disposition
+		// is In Progress — not fully Resolved.
+		pqcNeeds = "In Progress"
+	case models.PosturePQCReady, models.PostureSymmetricOnly:
+		// pqc-ready (pure PQC, migrated) and symmetric-only (AES-256 at rest,
+		// quantum-resistant, not a PQC-migration item) are both Resolved.
 		pqcNeeds = "Resolved"
 	}
 	return []models.ComplianceMapping{{

@@ -36,16 +36,26 @@ func BuildFindings(assets []models.CryptoAsset, comp *compliance.Registry, overr
 				posture = models.CryptoPosture(p)
 			}
 		}
+		// At-rest INVENTORY-ONLY (B3): quantum-resistant-at-rest (symmetric AES-256,
+		// PostureSymmetricOnly) is NOT a PQC-migration item. It is Grover-only
+		// (not Shor-vulnerable), so it must stay in the CBOM as a line item for
+		// inventory completeness but must NEVER be emitted as a Finding or feed the
+		// headline/severity buckets. We skip it from the finding stream here; the
+		// count of these inventory-only assets is reconciled separately in
+		// buildSummary (InventoryOnly) so the removed assets do not vanish silently.
+		if posture == models.PostureSymmetricOnly {
+			continue
+		}
 		// Determine severity. For genuinely vulnerable/at-risk postures take the
 		// worse of posture-derived and Mosca-derived (HNDL urgency rightly
-		// applies). But when the posture is already quantum-SAFE
-		// (symmetric-only / pqc-hybrid / pqc-ready), the Mosca/HNDL urgency is
-		// irrelevant — the cryptography is quantum-resistant regardless of data
-		// shelf-life — so the severity is the posture severity (INFORMATIONAL)
-		// only, and we do NOT let the posture-blind Mosca score raise it.
+		// applies). But when the posture is already quantum-resistant
+		// (pqc-hybrid / pqc-ready), the Mosca/HNDL urgency is irrelevant — the
+		// cryptography is quantum-resistant regardless of data shelf-life — so the
+		// severity is the posture severity (INFORMATIONAL) only, and we do NOT let
+		// the posture-blind Mosca score raise it.
 		moscaScore := risk.CalculateForService(a.Service, overrides)
 		sev := risk.SeverityFromPosture(posture)
-		if !risk.IsQuantumSafePosture(posture) {
+		if !risk.IsQuantumResistantPosture(posture) {
 			sev = risk.HighestSeverity(sev, risk.SeverityFromMosca(moscaScore.Score))
 		}
 		complianceMaps := []models.ComplianceMapping{}

@@ -10,6 +10,13 @@ type ScanSummary struct {
 	High          int `json:"high"`
 	Medium        int `json:"medium"`
 	Informational int `json:"informational"`
+	// InventoryOnly counts assets that are recorded for inventory completeness
+	// but are deliberately NOT emitted as Findings: quantum-resistant-at-rest
+	// (symmetric AES-256, PostureSymmetricOnly) is not a PQC-migration item, so it
+	// stays in the CBOM as a line item and is counted here, but never inflates the
+	// finding/severity buckets or the headline number. Without this count, the
+	// symmetric-only assets removed from the finding stream would vanish silently.
+	InventoryOnly int `json:"inventoryOnly"`
 	ServiceCount  int `json:"serviceCount"`
 }
 

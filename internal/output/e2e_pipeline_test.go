@@ -58,18 +58,18 @@ const (
 	e2eScale       = 40
 )
 
-// quantumSafePostures are the postures whose cryptography needs no PQC migration:
+// quantumResistantPostures are the postures whose cryptography needs no PQC migration:
 // AES symmetric-at-rest (Grover-only), PQ-hybrid, or pure PQC. Mirrors
-// risk.IsQuantumSafePosture; duplicated as a set here so the output package's
+// risk.IsQuantumResistantPosture; duplicated as a set here so the output package's
 // honesty assertions do not need to import internal/risk.
-var quantumSafePostures = map[string]bool{
+var quantumResistantPostures = map[string]bool{
 	string(models.PostureSymmetricOnly): true,
 	string(models.PosturePQCHybrid):     true,
 	string(models.PosturePQCReady):      true,
 }
 
 // quantumVulnerablePostures are the postures the scan flagged as NOT
-// quantum-safe (Shor-breakable classical asymmetric, weak/legacy, or absent
+// quantum-resistant (Shor-breakable classical asymmetric, weak/legacy, or absent
 // encryption). An asset with one of these MUST NOT carry a PQC-safe claim.
 var quantumVulnerablePostures = map[string]bool{
 	string(models.PostureNoEncryption):    true,
@@ -111,6 +111,13 @@ func buildE2ESummary(assets []models.CryptoAsset, findings []models.Finding, ser
 			s.Informational++
 		}
 	}
+	// Mirror scanner.buildSummary (B3): symmetric-only assets are inventory-only,
+	// not findings, and are reconciled via InventoryOnly.
+	for _, a := range assets {
+		if a.Properties != nil && a.Properties["posture"] == string(models.PostureSymmetricOnly) {
+			s.InventoryOnly++
+		}
+	}
 	return s
 }
 
@@ -130,9 +137,18 @@ func e2eScanResult(t *testing.T) models.ScanResult {
 		t.Fatal("mock generator produced 0 assets; the pipeline would assert nothing")
 	}
 	findings := scanner.BuildFindings(assets, (*compliance.Registry)(nil), nil)
-	if len(findings) != len(assets) {
-		t.Fatalf("BuildFindings produced %d findings for %d assets; expected one per asset",
-			len(findings), len(assets))
+	// B3 at-rest INVENTORY-ONLY: symmetric-only (quantum-resistant at rest) assets
+	// are inventoried but NOT emitted as findings, so the contract is one finding
+	// per NON-symmetric-only asset.
+	inventoryOnly := 0
+	for _, a := range assets {
+		if a.Properties != nil && a.Properties["posture"] == string(models.PostureSymmetricOnly) {
+			inventoryOnly++
+		}
+	}
+	if want := len(assets) - inventoryOnly; len(findings) != want {
+		t.Fatalf("BuildFindings produced %d findings for %d assets (%d inventory-only symmetric); expected %d (one per non-symmetric-only asset)",
+			len(findings), len(assets), inventoryOnly, want)
 	}
 	now := time.Now().UTC()
 	return models.ScanResult{
@@ -187,7 +203,7 @@ func realComponents(comps []CDXComponent) []CDXComponent {
 //     real taxonomy Entry (no AWSCategory=="Other") — honesty contract #5;
 //   - NO component claims a PQC-safe verdict that contradicts its asset posture:
 //     a quantum-VULNERABLE posture must never carry pqcHybrid=true or a
-//     ML-KEM/ML-DSA cryptamap:algorithmName, and a quantum-SAFE posture must
+//     ML-KEM/ML-DSA cryptamap:algorithmName, and a quantum-RESISTANT posture must
 //     never be labeled with a Shor-breakable asymmetric primitive (key-agree/
 //     signature/kem-classical) — honesty contract #4.
 func TestE2EPipeline_CBOM(t *testing.T) {
@@ -288,7 +304,7 @@ func TestE2EPipeline_CBOM(t *testing.T) {
 		// classical key-agree primitive. A pqcHybrid=true flag sitting over a bare
 		// classical key-agree primitive (no PQ KEM) would be a fabricated PQC-safe
 		// verdict introduced by the output layer. (The complementary invariant —
-		// that the SCANNER/mock never assigns a quantum-safe posture to a classical
+		// that the SCANNER/mock never assigns a quantum-resistant posture to a classical
 		// asymmetric primitive in the first place — is a scanner-layer concern; this
 		// e2e net deliberately does not police the mock's own posture/primitive
 		// pairing. See the reported mock-data gap.)
@@ -303,11 +319,11 @@ func TestE2EPipeline_CBOM(t *testing.T) {
 		}
 	}
 
-	// Sanity: the deterministic mock must actually exercise both a quantum-safe
+	// Sanity: the deterministic mock must actually exercise both a quantum-resistant
 	// and a quantum-vulnerable posture, else the consistency loop asserts nothing.
 	safeSeen, vulnSeen := 0, 0
 	for p, n := range postureCounts {
-		if quantumSafePostures[p] {
+		if quantumResistantPostures[p] {
 			safeSeen += n
 		}
 		if quantumVulnerablePostures[p] {

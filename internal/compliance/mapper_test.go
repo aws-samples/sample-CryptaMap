@@ -69,11 +69,24 @@ func TestStatusFromPosture(t *testing.T) {
 	if statusFromPosture(models.PostureNoEncryption) != "non-compliant" {
 		t.Error("no-encryption should be non-compliant")
 	}
-	if statusFromPosture(models.PosturePQCHybrid) != "compliant" {
-		t.Error("pqc-hybrid should be compliant")
+	// B4: hybrid PQ KEX with a traditional certificate is NOT fully resistant; it
+	// must be "partial" (hybrid KEX, traditional cert), never "compliant".
+	if statusFromPosture(models.PosturePQCHybrid) != "partial" {
+		t.Error("pqc-hybrid should be partial (hybrid KEX, traditional cert — not fully migrated)")
+	}
+	// pqc-ready (pure PQC) and symmetric-only (quantum-resistant at rest) are compliant.
+	if statusFromPosture(models.PosturePQCReady) != "compliant" {
+		t.Error("pqc-ready should be compliant")
+	}
+	if statusFromPosture(models.PostureSymmetricOnly) != "compliant" {
+		t.Error("symmetric-only (quantum-resistant at rest) should be compliant")
 	}
 	if statusFromPosture(models.PostureNonPQCClassical) != "partial" {
 		t.Error("non-pqc-classical should be partial")
+	}
+	// B4: an undetermined posture must NEVER be a clean/compliant verdict.
+	if got := statusFromPosture(models.PostureUnknown); got == "compliant" {
+		t.Errorf("unknown posture must never be compliant, got %q", got)
 	}
 }
 
@@ -84,10 +97,12 @@ func TestReadinessFromPosture(t *testing.T) {
 		models.PostureNoEncryption:    "quantum-vulnerable",
 		models.PostureLegacyTLS:       "quantum-vulnerable",
 		models.PostureNonPQCClassical: "partial",
-		models.PosturePQCHybrid:       "quantum-safe",
-		models.PosturePQCReady:        "quantum-safe",
-		models.PostureSymmetricOnly:   "quantum-safe",
-		models.PostureUnknown:         "informational",
+		// B4: hybrid PQ KEX + traditional cert is "partial", not the fully-resistant
+		// "quantum-safe" signal.
+		models.PosturePQCHybrid:     "partial",
+		models.PosturePQCReady:      "quantum-safe",
+		models.PostureSymmetricOnly: "quantum-safe",
+		models.PostureUnknown:       "informational",
 	}
 	for p, want := range cases {
 		if got := readinessFromPosture(p); got != want {

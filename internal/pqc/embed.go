@@ -147,7 +147,7 @@ var scannerDocFacts = map[string]ScannerDocFact{
 		AsOf:       "2026-06-09",
 	},
 	"sdkpqc/container_images/ecr-at-rest-encryption": {
-		Value:      "Amazon ECR encrypts repository contents at rest by default, and the encryption behavior is a definitional guarantee of the ECR EncryptionType enum: AES256 uses SSE-S3 AES-256, and KMS/KMS_DSSE with a symmetric (or AWS-managed/unreadable) key spec is a KMS-backed AES symmetric envelope. Both are symmetric-only and quantum-safe at rest. This provenance is stamped only when the resolved at-rest posture is symmetric-only.",
+		Value:      "Amazon ECR encrypts repository contents at rest by default, and the encryption behavior is a definitional guarantee of the ECR EncryptionType enum: AES256 uses SSE-S3 AES-256, and KMS/KMS_DSSE with a symmetric (or AWS-managed/unreadable) key spec is a KMS-backed AES symmetric envelope. Both are symmetric-only and quantum-resistant at rest. This provenance is stamped only when the resolved at-rest posture is symmetric-only.",
 		SourceURL:  "https://docs.aws.amazon.com/AmazonECR/latest/userguide/encryption-at-rest.html",
 		Confidence: "high",
 		AsOf:       "2026-06-09",
@@ -171,7 +171,7 @@ var scannerDocFacts = map[string]ScannerDocFact{
 		AsOf:       "2026-06-10",
 	},
 	"transit/appsync/aws-tls-policy": {
-		Value:      "AWS AppSync documents its own minimum transit-TLS floor on its Infrastructure Security / data-protection pages: clients accessing AppSync's published API endpoints must support TLS 1.2, with TLS 1.3 recommended (\"We require TLS 1.2 and recommend TLS 1.3\"), and perfect-forward-secrecy cipher suites (DHE/ECDHE). This is a documented TLS 1.2 minimum for the served endpoint; the exact version negotiated per connection depends on the client and is not pinned. No post-quantum / quantum-safe transit guarantee is documented. TLS for resolver hops to EC2 or CloudFront origins is the customer's responsibility and outside this floor.",
+		Value:      "AWS AppSync documents its own minimum transit-TLS floor on its Infrastructure Security / data-protection pages: clients accessing AppSync's published API endpoints must support TLS 1.2, with TLS 1.3 recommended (\"We require TLS 1.2 and recommend TLS 1.3\"), and perfect-forward-secrecy cipher suites (DHE/ECDHE). This is a documented TLS 1.2 minimum for the served endpoint; the exact version negotiated per connection depends on the client and is not pinned. No post-quantum / quantum-resistant transit guarantee is documented. TLS for resolver hops to EC2 or CloudFront origins is the customer's responsibility and outside this floor.",
 		SourceURL:  "https://docs.aws.amazon.com/appsync/latest/devguide/infrastructure-security.html",
 		Confidence: "high",
 		AsOf:       "2026-06-10",

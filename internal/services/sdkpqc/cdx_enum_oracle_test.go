@@ -138,7 +138,7 @@ func TestSDKPQCScanners_EnumOracleCBOMConformance(t *testing.T) {
 	// ---- ssm PlatformType (ssmtypes.PlatformType) --------------------------
 	// PlatformType drives the platformType flat property. The honesty contract
 	// stamps PostureUnknown regardless of platform (a known false-safe risk class:
-	// an unrecognized PlatformType must NOT be silently treated as quantum-safe).
+	// an unrecognized PlatformType must NOT be silently treated as quantum-resistant).
 	// Hold PingStatus fixed (Online) and iterate every PlatformType value.
 	t.Run("ssm_PlatformType", func(t *testing.T) {
 		platforms := ssmtypes.PlatformType("").Values()

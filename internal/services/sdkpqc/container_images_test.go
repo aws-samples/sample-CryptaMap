@@ -176,7 +176,7 @@ func TestContainerImagesScanImagesErrorNoSilentDrop(t *testing.T) {
 // TestContainerImagesScanDefaultAES256SymmetricOnly verifies the honesty posture
 // for an always-encrypted at-rest domain: a repository with no explicit
 // EncryptionConfiguration (ECR default AES256 / SSE-S3) must be classified
-// SymmetricOnly (quantum-safe at rest) and NEVER NoEncryption.
+// SymmetricOnly (quantum-resistant at rest) and NEVER NoEncryption.
 func TestContainerImagesScanDefaultAES256SymmetricOnly(t *testing.T) {
 	client := &fakeContainerImagesClient{
 		repoPages: []*ecr.DescribeRepositoriesOutput{
@@ -218,7 +218,7 @@ func TestContainerImagesScanKMSSpecMapping(t *testing.T) {
 		// FIX #7: a genuinely-unrecognized / future KeySpec must NOT false-safe to
 		// SymmetricOnly — it is the conservative PostureUnknown (mirrors
 		// keymgmt/kms_spec.go's kmsSpecPosture default). A future asymmetric spec
-		// must never be silently credited as a quantum-safe symmetric envelope.
+		// must never be silently credited as a quantum-resistant symmetric envelope.
 		{"unknown_future_spec", "ML_KEM_9999_FUTURE", models.PostureUnknown},
 		{"unrecognized_garbage_spec", "TOTALLY_UNKNOWN_SPEC", models.PostureUnknown},
 	}
@@ -259,7 +259,7 @@ func TestContainerImagesScanKMSSpecMapping(t *testing.T) {
 
 // TestContainerImagesScanKMSDescribeKeyErrorDegrades verifies the no-silent-classical
 // rule: when DescribeKey fails for a KMS-encrypted repository, the scanner degrades
-// to SYMMETRIC_DEFAULT (still SymmetricOnly, quantum-safe at rest) rather than
+// to SYMMETRIC_DEFAULT (still SymmetricOnly, quantum-resistant at rest) rather than
 // silently downgrading the at-rest fact to classical or NoEncryption.
 func TestContainerImagesScanKMSDescribeKeyErrorDegrades(t *testing.T) {
 	client := &fakeContainerImagesClient{

@@ -193,9 +193,9 @@ export const LEARN_SECTIONS: LearnSection[] = [
   },
   {
     id: 'symmetric-vs-asymmetric',
-    title: 'Symmetric vs. asymmetric: what breaks and what stays safe',
+    title: 'Symmetric vs. asymmetric: what breaks and what stays quantum-resistant',
     summary:
-      'Shor breaks public-key (RSA/ECC/DH); Grover only weakens symmetric ciphers, so AES-256 stays quantum-safe.',
+      'Shor breaks public-key (RSA/ECC/DH); Grover only weakens symmetric ciphers, so AES-256 stays quantum-resistant.',
     blocks: [
       {
         body:
@@ -214,12 +214,12 @@ export const LEARN_SECTIONS: LearnSection[] = [
       },
       {
         body:
-          'Because Grover only quadratically speeds up brute-force key search — and is hard to parallelize — NIST states that AES-192 and AES-256 will still be safe against quantum attack, and that AES-128 will likely remain secure too. This is why CryptaMap treats AES-256-at-rest as "quantum-safe — no action".',
+          'Because Grover only quadratically speeds up brute-force key search — and is hard to parallelize — NIST states that AES-192 and AES-256 will still be safe against quantum attack, and that AES-128 will likely remain secure too. This is why CryptaMap treats AES-256-at-rest as "quantum-resistant — no action".',
         sources: [NIST_PQC_FAQ],
       },
       {
         body:
-          'Plain-language summary: think of it as two different locks. Public-key crypto (RSA/ECC) is the lock used to set up keys and sign — Shor picks that lock, so it must be replaced. Symmetric crypto (AES) is the bulk-data lock — Grover only halves its effective strength, so AES-256 (and even AES-128 in practice) stays strong; the fix there is just bigger keys, not a new algorithm.',
+          'Plain-language summary: think of it as two different locks. Public-key crypto (RSA/ECC) is the lock used to set up keys and sign — Shor picks that lock, so it must be replaced. Symmetric crypto (AES) is the bulk-data lock — Grover only halves its effective strength, so AES-256 stays quantum-resistant; AES-128 keeps a usable but smaller margin — review it. The fix there is just bigger keys, not a new algorithm.',
         sources: [NISTIR_8105, NIST_PQC_FAQ],
         aiSimplified: true,
       },
@@ -301,7 +301,7 @@ export const LEARN_SECTIONS: LearnSection[] = [
       },
       {
         body:
-          'Plain-language summary: for a lot of AWS assets, "going post-quantum" is not a rewrite. On a load balancer or Regional API Gateway it can be a one-time security-policy change to a PQ policy; in KMS / Private CA it is choosing an ML-DSA key spec; and AES-256 at rest is already quantum-safe and needs no change at all. CryptaMap\'s "Effort" and "PQC status" columns reflect exactly which of these applies to each asset.',
+          'Plain-language summary: for a lot of AWS assets, "going post-quantum" is not a rewrite. On a load balancer or Regional API Gateway it can be a one-time security-policy change to a PQ policy; in KMS / Private CA it is choosing an ML-DSA key spec; and AES-256 at rest is already quantum-resistant and needs no change at all. CryptaMap\'s "Effort" and "PQC status" columns reflect exactly which of these applies to each asset.',
         sources: [AWS_ELB_POLICIES, AWS_APIGW_POLICIES, AWS_KMS_SPECS],
         aiSimplified: true,
       },
@@ -321,18 +321,18 @@ export const LEARN_SECTIONS: LearnSection[] = [
       },
       {
         body:
-          'Posture legend: "No encryption" (critical) and "Legacy TLS" (high) are classical weaknesses to fix regardless of quantum. "Classical (non-PQC)" means public-key crypto that Shor would break — the migration target. "Symmetric only" (AES-256), "PQC hybrid" and "PQC ready" are already quantum-safe and need no key-exchange migration.',
+          'Posture legend: "No encryption" (critical) and "Legacy TLS" (high) are classical weaknesses to fix regardless of quantum. "Traditional (non-PQC)" means public-key crypto that Shor would break — the migration target. "Symmetric only" (AES-256), "PQC hybrid" and "PQC ready" are already quantum-resistant and need no key-exchange migration.',
         sources: [NISTIR_8105, NIST_PQC_FAQ],
       },
       {
         body:
-          'PQC status — read it carefully. "Quantum-safe — no action" (shown for symmetric-only / PQC-hybrid / PQC-ready assets) means the asset is ALREADY safe; you do not need to do anything. "PQC available" / "PQC hybrid (TLS only)" means a post-quantum option exists today and you SHOULD enable it. "Not yet available" means this asset is quantum-vulnerable AND no managed PQC fix has shipped for it yet — you need PQC here but cannot get it today, so track AWS announcements. Do not confuse "no action" (already safe) with "not yet" (needs it, none shipped).',
+          'PQC status — read it carefully. "Quantum-resistant — no action" (shown for symmetric-only / PQC-hybrid / PQC-ready assets) means the asset is ALREADY quantum-resistant; you do not need to do anything. "PQC available" / "PQC hybrid (TLS only)" means a post-quantum option exists today and you SHOULD enable it. "Not yet available" means this asset is quantum-vulnerable AND no managed PQC fix has shipped for it yet — you need PQC here but cannot get it today, so track AWS announcements. Do not confuse "no action" (already quantum-resistant) with "not yet" (needs it, none shipped).',
         sources: [AWS_KMS_SPECS, NIST_PQC_FAQ],
         aiSimplified: true,
       },
       {
         body:
-          'Symmetric strength labels: "AES-256 — quantum-safe" (no action); "AES-128/192 — adequate, review" (fine today, smaller Grover margin, consider AES-256); "weak — replace" (DES/3DES/RC4, classically broken irrespective of quantum); "strength unconfirmed" (a key size could not be determined, so it is conservatively neither labelled safe nor weak). These tier the symmetric primitive and are additive to the quantum-vulnerable flag.',
+          'Symmetric strength labels: "AES-256 — quantum-resistant" (no action); "AES-128/192 — adequate, review" (fine today, smaller Grover margin, consider AES-256); "weak — replace" (DES/3DES/RC4, classically broken irrespective of quantum); "strength unconfirmed" (a key size could not be determined, so it is conservatively neither labelled safe nor weak). These tier the symmetric primitive and are additive to the quantum-vulnerable flag.',
         sources: [NIST_PQC_FAQ, NISTIR_8105],
         aiSimplified: true,
       },

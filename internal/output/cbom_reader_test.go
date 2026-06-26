@@ -130,8 +130,17 @@ func TestParseCBOMRoundTrip(t *testing.T) {
 	// Regenerate findings deterministically (the key unlock: no DynamoDB needed).
 	reg := compliance.NewRegistry([]string{"MITRE_PQCC"})
 	findings := scanner.BuildFindings(got.Assets, reg, nil)
-	if len(findings) != len(got.Assets) {
-		t.Fatalf("findings=%d, want %d (one per asset)", len(findings), len(got.Assets))
+	// B3 at-rest INVENTORY-ONLY: symmetric-only (quantum-resistant at rest) assets
+	// are round-tripped in the CBOM but NOT emitted as findings, so the contract
+	// is one finding per NON-symmetric-only asset.
+	inventoryOnly := 0
+	for _, a := range got.Assets {
+		if a.Properties != nil && a.Properties["posture"] == string(models.PostureSymmetricOnly) {
+			inventoryOnly++
+		}
+	}
+	if want := len(got.Assets) - inventoryOnly; len(findings) != want {
+		t.Fatalf("findings=%d, want %d (%d assets, %d inventory-only symmetric)", len(findings), want, len(got.Assets), inventoryOnly)
 	}
 	for _, fn := range findings {
 		if fn.AssetBomRef == "" {

@@ -77,7 +77,7 @@ func (PaymentCryptographyScanner) Category() models.Category { return models.Cat
 // (mirrors kmsSpecPosture). It classifies the KEY's own algorithm — endpoint
 // PQ-TLS is never considered here.
 //
-//   - AES_*               -> PostureSymmetricOnly  (AES is quantum-safe-grade symmetric)
+//   - AES_*               -> PostureSymmetricOnly  (AES is quantum-resistant-grade symmetric)
 //   - TDES_*              -> PostureSymmetricOnly  (3DES is SYMMETRIC, so it is Grover-
 //     class, NOT Shor-class — it is NOT a post-quantum migration target and must not
 //     be counted as quantum-vulnerable in the PQC KPI. It IS a weak/legacy classical
@@ -85,7 +85,7 @@ func (PaymentCryptographyScanner) Category() models.Category { return models.Cat
 //     separate "weakCipher" annotation + remediation note in Scan — classical hygiene,
 //     not a quantum risk. Labeling it NonPQCClassical (defined as RSA/ECDHE asymmetric)
 //     was a FALSE-ALARM that polluted the PQC denominator.)
-//   - HMAC_*              -> PostureSymmetricOnly  (keyed-hash MAC, symmetric, quantum-safe-grade)
+//   - HMAC_*              -> PostureSymmetricOnly  (keyed-hash MAC, symmetric, quantum-resistant-grade)
 //   - RSA_* / ECC_*       -> PostureNonPQCClassical (asymmetric, quantum-vulnerable)
 //   - unknown / future    -> PostureUnknown         (never guess a safe posture)
 func payAlgoPosture(keyAlgo pctypes.KeyAlgorithm) models.CryptoPosture {
@@ -105,7 +105,7 @@ func payAlgoPosture(keyAlgo pctypes.KeyAlgorithm) models.CryptoPosture {
 	}
 	// Unknown / future KeyAlgorithm: classify Unknown, NOT symmetric-only.
 	// Defaulting an unrecognized algorithm to a safe posture would FALSE-SAFE a new
-	// asymmetric/quantum-vulnerable algorithm as quantum-safe.
+	// asymmetric/quantum-vulnerable algorithm as quantum-resistant.
 	return models.PostureUnknown
 }
 

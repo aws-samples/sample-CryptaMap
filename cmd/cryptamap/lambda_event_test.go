@@ -611,9 +611,12 @@ func TestMergeFailedShardReport(t *testing.T) {
 	}
 }
 
-// TestSummarizePostureCounts + TestQuantumSafePct lock the /summary posture
-// rollup (B2): per-posture bucketing mirrors the dashboard, and the quantum-safe
-// % is stage2/(stage1+stage2) with stage0 + unknown excluded.
+// TestSummarizePostureCounts + TestHeadlineCallouts lock the /summary posture
+// rollup: per-posture bucketing mirrors the dashboard, and the two honest headline
+// callouts replace the retired single headline percentage — quantumVulnerablePct =
+// (legacyTLS+nonPQCClassical)/classifiable (Unknown excluded), and pqcEndToEndPct =
+// pqcReady/total (hybrid-with-classical-cert and symmetric-only EXCLUDED from the
+// numerator; full asset total in the denominator).
 func TestSummarizePostureCounts(t *testing.T) {
 	mk := func(posture models.CryptoPosture) models.CryptoAsset {
 		a := models.CryptoAsset{Properties: map[string]string{}}
@@ -636,14 +639,33 @@ func TestSummarizePostureCounts(t *testing.T) {
 		p.SymmetricOnly != 3 || p.PQCHybrid != 1 || p.PQCReady != 1 || p.Unknown != 1 {
 		t.Errorf("posture counts = %+v", p)
 	}
-	// stage1 = legacy(1)+classical(2) = 3; stage2 = sym(3)+hybrid(1)+ready(1) = 5;
-	// encrypted = 8; quantum-safe% = round(62.5) = 63 — round-half-UP, matching JS
-	// Math.round(62.5)===63 (verified), so backend /summary == dashboard math.
-	if got := quantumSafePct(p); got != 63 {
-		t.Errorf("quantumSafePct = %d, want 63", got)
+}
+
+func TestHeadlineCallouts(t *testing.T) {
+	// noenc(1) legacy(1) classical(2) sym(3) hybrid(1) ready(1) unknown(1).
+	p := mergeSummaryPosture{
+		NoEncryption: 1, LegacyTLS: 1, NonPQCClassical: 2,
+		SymmetricOnly: 3, PQCHybrid: 1, PQCReady: 1, Unknown: 1,
 	}
-	// No encrypted assets -> 0, never a divide-by-zero.
-	if got := quantumSafePct(mergeSummaryPosture{NoEncryption: 5, Unknown: 2}); got != 0 {
-		t.Errorf("quantumSafePct(no encrypted) = %d, want 0", got)
+	// quantumVulnerablePct: vulnerable = legacy(1)+classical(2) = 3; classifiable =
+	// all-but-unknown = 1+1+2+3+1+1 = 9; 3/9 = 33.33% -> round = 33.
+	if got := quantumVulnerablePct(p); got != 33 {
+		t.Errorf("quantumVulnerablePct = %d, want 33", got)
+	}
+	// pqcEndToEndPct: numerator = pqcReady(1) ONLY (hybrid + symmetric EXCLUDED);
+	// denominator = full total incl. unknown = 10; 1/10 = 10%.
+	if got := pqcEndToEndPct(p); got != 10 {
+		t.Errorf("pqcEndToEndPct = %d, want 10", got)
+	}
+	// No classifiable / no assets -> 0, never a divide-by-zero.
+	if got := quantumVulnerablePct(mergeSummaryPosture{Unknown: 5}); got != 0 {
+		t.Errorf("quantumVulnerablePct(only unknown) = %d, want 0", got)
+	}
+	if got := pqcEndToEndPct(mergeSummaryPosture{}); got != 0 {
+		t.Errorf("pqcEndToEndPct(empty) = %d, want 0", got)
+	}
+	// Hybrid must NEVER count as end-to-end PQC: all-hybrid org -> 0%.
+	if got := pqcEndToEndPct(mergeSummaryPosture{PQCHybrid: 4}); got != 0 {
+		t.Errorf("pqcEndToEndPct(all hybrid) = %d, want 0", got)
 	}
 }
