@@ -18,6 +18,10 @@ usable by any organization preparing for the post-quantum transition. The PQC su
 against live AWS documentation, with each row carrying a source URL, a
 confidence level, and an `AsOf` verification date.
 
+New here? The **[FAQ](./docs/FAQ.md)** answers the most common evaluation and
+operational questions (what it scans, safety, how to run it, reading the results,
+costs, teardown).
+
 For the deeper design — taxonomy, the PQC matrix, the merge/roadmap engines, the
 org fan-out topology, and the generated-types contract — see
 [`ARCHITECTURE.md`](./ARCHITECTURE.md).
@@ -29,9 +33,9 @@ CryptaMap ships a **local-first** React/Cloudscape dashboard: run a scan, then
 surface). The screenshots below show **synthetic demo data**, not a real AWS scan.
 
 <div align="center">
-  <img width="800" alt="CryptaMap dashboard — cryptographic posture overview: total assets, quantum-vulnerable count, quantum-resistant %, and one-flip quick wins" src="docs/img/dashboard-overview.png">
+  <img width="800" alt="CryptaMap dashboard — cryptographic posture overview: total assets, the six-tier maturity breakdown, % quantum-vulnerable, % migrated to post-quantum end-to-end, and one-flip quick wins" src="docs/img/dashboard-overview.png">
   <br>
-  <sub><i>Cryptographic posture at a glance — assets, what's quantum-vulnerable, your quantum-resistant %, and how many fixes are one-flip quick wins.</i></sub>
+  <sub><i>Cryptographic posture at a glance — assets, the six-tier maturity breakdown, % quantum-vulnerable, % migrated to post-quantum end-to-end, and how many fixes are one-flip quick wins.</i></sub>
 </div>
 
 ### Try it in two minutes (synthetic data, no AWS account)
@@ -294,6 +298,9 @@ This avoids any cross-account role and keeps every step local — but it require
 someone to run the CLI in each account. For a true hands-off org scan, use the
 deployed fan-out above.
 
+> **Questions?** The **[FAQ](./docs/FAQ.md)** covers reading the results, accuracy and
+> limitations, data residency, costs, Security Hub import, and teardown.
+
 ### Safety, residency, and retention (read before deploying org-wide)
 
 - **Read-only by construction.** The scanner role carries a **custom
@@ -387,7 +394,7 @@ sub-aspect) lives in `internal/taxonomy/taxonomy.go`.
 
 > Already ran AWS's Config PQC-Readiness scanner? See
 > [`docs/PQC-READINESS-CROSSWALK.md`](./docs/PQC-READINESS-CROSSWALK.md) for how
-> CryptaMap's posture / `% quantum-resistant` vocabulary lines up with AWS's Tier 1/2/3
+> CryptaMap's posture / maturity vocabulary lines up with AWS's Tier 1/2/3
 > and NIST's quantum-vulnerable / quantum-resistant terms.
 
 ## What CryptaMap does NOT scan (the absolute list)
@@ -452,7 +459,7 @@ CodeDeploy, Cloud9.
 > Where a service delegates its encryption to S3, EBS, KMS, ACM, or another
 > covered service, that crypto **is** in the CBOM — under the owning service's
 > scanner. Listing the delegating service separately would double-count the same
-> key/certificate and distort the `% quantum-resistant` figures. The authoritative,
+> key/certificate and distort the posture-breakdown figures. The authoritative,
 > always-current register (with per-service reasons and the full deferred backlog)
 > is [`docs/COVERAGE-AND-GAPS.md`](./docs/COVERAGE-AND-GAPS.md).
 
