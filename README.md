@@ -18,9 +18,10 @@ usable by any organization preparing for the post-quantum transition. The PQC su
 against live AWS documentation, with each row carrying a source URL, a
 confidence level, and an `AsOf` verification date.
 
-New here? The **[FAQ](./docs/FAQ.md)** answers the most common evaluation and
-operational questions (what it scans, safety, how to run it, reading the results,
-costs, teardown).
+> [!TIP]
+> **New here?** The **[FAQ](./docs/FAQ.md)** answers the most common evaluation and
+> operational questions — what it scans, safety, how to run it, reading the results,
+> costs, and teardown.
 
 For the deeper design — taxonomy, the PQC matrix, the merge/roadmap engines, the
 org fan-out topology, and the generated-types contract — see
