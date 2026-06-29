@@ -294,3 +294,107 @@ account), deploy the stacks directly from the **management/payer account** and p
 entirely (the management account is always allowed to manage service-managed
 StackSets). It works, but it puts CryptaMap's standing access in the payer account —
 the dedicated Audit account is preferred for production.
+
+## Teardown / uninstall (ordered procedure)
+
+> ⚠️ **`make destroy` is destructive, and it is deliberately *not* enough.** The
+> evidence store is **RETAIN-on-destroy by design** (so a stray `cdk destroy`
+> cannot wipe in-window CBOM/scan evidence), and the member-account roles live in a
+> **StackSet** that must be emptied before it can be removed. A full uninstall is
+> multi-step and partly manual. Do them in this order.
+
+**1) Delete the member-account `CryptaMapScannerRole` (org deployments only).**
+The role is rolled out by a **SERVICE_MANAGED** StackSet
+(`cdk/lib/security-stack.ts`), so the StackSet's stack instances must be deleted from
+every target account/OU **before** the StackSet itself can be removed — otherwise the
+`CryptaMap-Security` stack delete fails. Delete the instances first:
+
+```bash
+# Find the StackSet name (look for the CryptaMapScannerRole StackSet):
+aws cloudformation list-stack-sets --status ACTIVE --call-as DELEGATED_ADMIN
+
+# Delete its instances across the target OU(s) and regions, then confirm none remain:
+aws cloudformation delete-stack-instances \
+  --stack-set-name <SCANNER_ROLE_STACKSET_NAME> \
+  --deployment-targets OrganizationalUnitIds=<ROOT_OR_OU_ID> \
+  --regions <HOME_REGION> --no-retain-stacks --call-as DELEGATED_ADMIN
+aws cloudformation list-stack-instances \
+  --stack-set-name <SCANNER_ROLE_STACKSET_NAME> --call-as DELEGATED_ADMIN
+```
+
+(Use `--call-as SELF` instead of `DELEGATED_ADMIN` if you deployed from the
+management account with `-c stackSetCallAs=SELF`.)
+
+**2) Destroy the in-account stacks.**
+
+```bash
+make destroy        # cdk destroy --all --force  (DESTRUCTIVE)
+```
+
+This removes the orchestration stacks and the Audit-account roles
+(`CryptaMapOrchestratorRole` and the local `CryptaMapScannerRole`), the scanner
+Lambda, the scheduled-scan rule, the seed/merge Lambda log groups, and the
+`CryptaMap-Security` stack (which removes the now-empty StackSet from step 1).
+
+**3) Manually clean the RETAINed evidence store.** `cdk destroy` intentionally
+leaves these behind (`cdk/lib/data-stack.ts`, `cdk/lib/org-fanout-stack.ts`); delete
+them by hand only when you are decommissioning and want the evidence gone:
+
+- the **results S3 bucket** — it is **versioned**, so every object *version* (and any
+  delete markers) must be purged before the bucket can be deleted;
+- the **results access-logs S3 bucket**;
+- the **DynamoDB scans table**;
+- the **KMS CMK** (schedule key deletion; it cannot be deleted instantly);
+- the **state-machine CloudWatch log group**.
+
+There is no Make target for this step — it is manual on purpose, so that tearing down
+the infrastructure never silently destroys collected evidence.
+
+**4) Deregister the StackSets delegated administrator (DELEGATED_ADMIN mode only).**
+If you registered the Audit account as a delegated admin during setup, reverse it
+from a management-account admin:
+
+```bash
+aws organizations deregister-delegated-administrator \
+  --service-principal member.org.stacksets.cloudformation.amazonaws.com \
+  --account-id <AUDIT_ACCOUNT_ID>
+```
+
+In `SELF` mode (deployed from the management account) there is no delegated admin to
+deregister, so skip this step.
+
+> `make clean` only removes **local** build artifacts (`dist/`, `cdk/cdk.out`,
+> `dashboard/dist`). It touches no cloud resources.
+
+## AWS GovCloud (US) and China partition support
+
+CryptaMap **runs in the GovCloud (US) and China partitions**, with a small number of
+documented caveats. It never hard-blocks a non-India region — it emits a loud
+stderr **notice** at synth time and proceeds (`cdk/bin/app.ts`).
+
+**What is partition-aware (works correctly):**
+
+- **Security Hub ASFF output.** Both the finding `ProductArn` and each
+  `Resources[].Partition` are derived from the finding's own region
+  (`us-gov-*` → `aws-us-gov`, `cn-*` → `aws-cn`, else `aws`), so findings import in
+  the correct partition (`internal/output/securityhub.go`). The ASFF `ProductArn`
+  validator accepts all three partitions.
+- **The org fan-out cross-account assume path.** The seed Lambda builds member-role
+  ARNs from the CloudFormation `AWS::Partition` pseudo-parameter and the scan Lambda
+  assumes the event-supplied `roleArn`, so assumed-role ARNs resolve to the correct
+  partition (`cdk/lib/org-fanout-stack.ts`, `cdk/lib/security-stack.ts`).
+- **Air-gapped / egress-blocked operation.** A first-class supported environment: the
+  baked-in PQC knowledge baseline is mandatory and the optional network refresh is
+  never a precondition (`docs/SELF-UPDATING-KNOWLEDGE.md`). Scans are fully functional
+  offline.
+
+**Known cosmetic caveat:** the CBOM component `bom-ref` resource ARNs carry an
+`arn:aws:` prefix even in GovCloud/China (`internal/services/common.go`,
+`internal/services/datarest/s3.go`). This value is an internal **dedup key**, not an
+ARN submitted to any AWS API, so it does not affect imports, scanning, or
+correctness — it is a display/identity detail only. The ASFF ARNs that *are* sent to
+AWS are partition-correct (above).
+
+> Enabling StackSets trusted access and Security Hub in GovCloud/China is subject to
+> each partition's own service availability; confirm those services are available in
+> your target regions before deploying.

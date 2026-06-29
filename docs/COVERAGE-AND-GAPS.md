@@ -8,6 +8,11 @@
 _Last updated: 2026-06-18. Registry: **99 scanners**, **92 resource types**,
 **78 crypto-bearing services covered**, 5 crypto dimensions._
 
+> The **99** figure is the number of distinct taxonomy scanner IDs
+> (`internal/taxonomy/taxonomy.go`). Some scanners share a single Go source file, so the
+> raw file count under `internal/services/` is higher — the 99 count is the
+> taxonomy-exposed scanner count, not a file count.
+
 > **2026-06-17/18 live-validation pass** (internal-only QA, not shipped in this repo):
 > an internally-run create→scan→verify→teardown pass (guaranteed teardown + honest
 > orphan sweep) classified **real** AWS resources of known crypto state. This raises
