@@ -6,6 +6,7 @@ import (
 	"math/rand"
 	"os"
 	"runtime/debug"
+	"strings"
 	"sync"
 	"time"
 
@@ -17,6 +18,7 @@ import (
 	"github.com/aws-samples/cryptamap/internal/compliance"
 	"github.com/aws-samples/cryptamap/internal/pqc"
 	"github.com/aws-samples/cryptamap/internal/risk"
+	"github.com/aws-samples/cryptamap/internal/services"
 	"github.com/aws-samples/cryptamap/pkg/models"
 )
 
@@ -82,6 +84,12 @@ type scanOutput struct {
 	assets   []models.CryptoAsset
 	err      error
 	duration time.Duration
+	// truncated records that this scanner's results were cut at a cap
+	// (services.MaxAssetsPerScanner via services.TakeTruncated, or the
+	// per-service EngineOptions.PerServiceCap). Folded into the scanner's
+	// ServiceScanReport.Errors as a services.TruncationSentinel entry so the
+	// incompleteness is machine-readable, not stderr-only.
+	truncated bool
 }
 
 // Run executes the full scan against the AWS account/region described by cfg.
@@ -108,10 +116,11 @@ func (e *Engine) Run(ctx context.Context, cfg aws.Config, accountID string) mode
 				start := time.Now()
 				name := j.scanner.Name()
 				assets, err := func() (a []models.CryptoAsset, scanErr error) {
-					// Recover from a panicking scanner so one bad scanner does not
-					// crash the whole account/region scan. The panic is converted
-					// into a normal scanner error, surfaced to stderr like any other
-					// scanner error below, and the remaining scanners keep running.
+					// Defense in depth for ENGINE bookkeeping only: the real
+					// scanner panic protection lives in scanWithDeadline's own
+					// recover (a parent recover cannot catch a child-goroutine
+					// panic — see the comment there). This outer recover can only
+					// catch panics raised on THIS goroutine (engine-side code).
 					defer func() {
 						if r := recover(); r != nil {
 							a = nil
@@ -120,6 +129,10 @@ func (e *Engine) Run(ctx context.Context, cfg aws.Config, accountID string) mode
 					}()
 					return e.runWithRetries(ctx, cfg, j.scanner)
 				}()
+				// Consume (and clear) the MaxAssetsPerScanner truncation mark set by
+				// services.TruncationCapReached inside the Scan, so the incompleteness
+				// travels on the scan report instead of dying on stderr.
+				truncated := services.TakeTruncated(name)
 				// Apply an optional per-service cap (EngineOptions.PerServiceCap).
 				// This lets an operator bound a single pathological service in one
 				// shard (e.g. an account with millions of one resource type) without
@@ -129,12 +142,14 @@ func (e *Engine) Run(ctx context.Context, cfg aws.Config, accountID string) mode
 					fmt.Fprintf(os.Stderr, "[scanner:%s] per-service cap %d applied in region %s (had %d assets); results truncated\n",
 						j.scanner.Name(), cap, cfg.Region, len(assets))
 					assets = assets[:cap]
+					truncated = true
 				}
 				results <- scanOutput{
-					scanner:  j.scanner.Name(),
-					assets:   assets,
-					err:      err,
-					duration: time.Since(start),
+					scanner:   j.scanner.Name(),
+					assets:    assets,
+					err:       err,
+					duration:  time.Since(start),
+					truncated: truncated,
 				}
 			}
 		}(i)
@@ -166,6 +181,15 @@ func (e *Engine) Run(ctx context.Context, cfg aws.Config, accountID string) mode
 			// a legitimately empty account ("0 assets" with no signal).
 			fmt.Fprintf(os.Stderr, "[scanner:%s] error: %v\n", r.scanner, r.err)
 			scanErrors++
+		}
+		if r.truncated {
+			// Typed sentinel (prefix services.TruncationSentinel) so structured
+			// consumers — the CBOM writer's cryptamap:truncated metadata property,
+			// the dashboard, org merge — can tell "results incomplete: truncated at
+			// a cap" apart from an ordinary scanner error. Deliberately NOT counted
+			// in scanErrors: the scan itself succeeded, its results are just capped.
+			stat.Errors = append(stat.Errors,
+				fmt.Sprintf("%s: %s results truncated at cap in region %s; CBOM under-reports this service", services.TruncationSentinel, r.scanner, cfg.Region))
 		}
 		stats = append(stats, stat)
 		allAssets = append(allAssets, r.assets...)
@@ -210,6 +234,13 @@ func (e *Engine) runWithRetries(ctx context.Context, cfg aws.Config, s ServiceSc
 	}
 	var lastErr error
 	for attempt := 0; attempt <= e.Opts.MaxRetries; attempt++ {
+		// Clear any truncation mark left by a PRIOR failed attempt before this
+		// one runs: a retryable attempt that hit MaxAssetsPerScanner then errored
+		// out would otherwise leave a stale mark that TakeTruncated (consumed once
+		// after the loop) would attribute to the eventual successful attempt —
+		// falsely labelling a complete scan "truncated". Each attempt starts clean
+		// and re-marks itself via TruncationCapReached only if IT truncates.
+		services.UnmarkTruncated(s.Name())
 		assets, err := scanWithDeadline(ctx, cfg, s)
 		if err == nil {
 			return assets, nil
@@ -326,13 +357,10 @@ func shouldRetry(err error) bool {
 // contract (GenericAPIError implements it), and tests construct one directly.
 var _ smithy.APIError = (*smithy.GenericAPIError)(nil)
 
+// contains delegates to strings.Contains (previously a hand-rolled O(n·m)
+// re-implementation on the retry hot path).
 func contains(s, substr string) bool {
-	for i := 0; i+len(substr) <= len(s); i++ {
-		if s[i:i+len(substr)] == substr {
-			return true
-		}
-	}
-	return false
+	return strings.Contains(s, substr)
 }
 
 func backoff(attempt, baseMs, maxMs int) time.Duration {

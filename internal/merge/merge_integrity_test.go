@@ -325,14 +325,12 @@ func TestCrossAccountNoCollision(t *testing.T) {
 	}
 }
 
-// TestEmptyARNFindingCollision is a FOCUSED probe of the findingKey fallback. A
-// finding with NEITHER an AssetBomRef NOR a ResourceARN keys on
-// "" + Service + Posture. Two genuinely DIFFERENT resources (different
-// ResourceID, even different accounts) that both lack an ARN and share
-// (Service, Posture) collide on this key and one is silently dropped, keeping
-// only the higher severity. This documents the (narrow) condition under which a
-// real finding can be lost in the merge. It is currently only reachable if a
-// scanner emits findings with empty AssetBomRef AND empty ResourceARN.
+// TestEmptyARNFindingCollision is a FOCUSED probe of the findingKey fallback.
+// A finding with NEITHER an AssetBomRef NOR a ResourceARN now keys on the full
+// (AccountID, Region, ResourceID) identity plus (Service, Posture), so two
+// genuinely DIFFERENT resources that both lack an ARN and share
+// (Service, Posture) are NO LONGER collapsed — both findings survive the merge
+// (the historical lossy behavior this test used to document is fixed).
 func TestEmptyARNFindingCollision(t *testing.T) {
 	mkNoRef := func(resourceID, acct, svc string, sev models.Severity) models.Finding {
 		return models.Finding{
@@ -354,18 +352,85 @@ func TestEmptyARNFindingCollision(t *testing.T) {
 	}
 	got := Merge(scans, "999999999999")
 
-	// Document the ACTUAL behavior: the two ARN-less findings collide and one is
-	// dropped. If a fix later disambiguates them (e.g. keying on ResourceID or
-	// AccountID in the fallback), this count becomes 2 and the test should be
-	// updated to assert no-loss. We assert the current lossy behavior so the
-	// regression is visible and intentional, not a surprise.
-	if len(got.Merged.Findings) != 1 {
-		t.Fatalf("ARN-less collision: got %d findings; behavior changed — "+
-			"if the fallback key now includes ResourceID/AccountID this is a FIX, update the audit and assert 2",
+	// The fallback key now includes AccountID/Region/ResourceID, so distinct
+	// ARN-less resources no longer collide: BOTH findings must survive.
+	if len(got.Merged.Findings) != 2 {
+		t.Fatalf("ARN-less findings: got %d, want 2 (fallback key must preserve full resource identity)",
 			len(got.Merged.Findings))
 	}
-	// The surviving one is the higher severity (highest-severity-wins union).
-	if got.Merged.Findings[0].Severity != models.SeverityHigh {
-		t.Errorf("survivor severity = %q, want HIGH (highest-severity-wins)", got.Merged.Findings[0].Severity)
+	seen := map[string]bool{}
+	for _, f := range got.Merged.Findings {
+		seen[f.ResourceID] = true
+	}
+	if !seen["resource-A"] || !seen["resource-B"] {
+		t.Errorf("expected both resource-A and resource-B to survive, got %v", seen)
+	}
+}
+
+// -----------------------------------------------------------------------------
+// 5. SLASH-CONTAINING RESOURCE IDENTITY — full ResourceID preserved verbatim.
+// -----------------------------------------------------------------------------
+
+// TestSlashResourceIDIdentityPreserved proves that resources whose ResourceID
+// contains "/" (e.g. KMS aliases "alias/aws/dynamodb" vs "alias/aws/s3") keep
+// their FULL identity through merge/dedup: they are never split or truncated
+// on "/", so distinct resources cannot collapse — even for ingested CBOM
+// assets that arrive without a BomRef or ARN (the IdentityKey composite
+// fallback path).
+func TestSlashResourceIDIdentityPreserved(t *testing.T) {
+	mkNoRefAsset := func(resourceID, acct, region, svc string) models.CryptoAsset {
+		return models.CryptoAsset{
+			// BomRef and ResourceARN intentionally empty: exercises the
+			// IdentityKey composite fallback that must carry ResourceID verbatim.
+			Name:       resourceID,
+			Service:    svc,
+			AccountID:  acct,
+			Region:     region,
+			ResourceID: resourceID,
+		}
+	}
+	scans := []models.ScanResult{
+		{Mode: "live", AccountID: "111111111111", Region: "us-east-1", Assets: []models.CryptoAsset{
+			mkNoRefAsset("alias/aws/dynamodb", "111111111111", "us-east-1", "kms_spec"),
+			mkNoRefAsset("alias/aws/s3", "111111111111", "us-east-1", "kms_spec"),
+			// ARN-backed slash IDs must also survive intact.
+			mkAsset("arn:aws:kms:us-east-1:111111111111:alias/aws/rds", "kms_spec", "111111111111", "us-east-1", nil),
+		}},
+		{Mode: "live", AccountID: "111111111111", Region: "us-east-1", Assets: []models.CryptoAsset{
+			// Exact duplicate of the first shard's asset: MUST still dedup to one.
+			mkNoRefAsset("alias/aws/dynamodb", "111111111111", "us-east-1", "kms_spec"),
+		}},
+	}
+	got := Merge(scans, "999999999999")
+
+	if got.Merged.Summary.TotalAssets != 3 {
+		t.Fatalf("TotalAssets = %d, want 3 (distinct slash IDs must not collapse; true dup must dedup)",
+			got.Merged.Summary.TotalAssets)
+	}
+	want := map[string]bool{
+		"alias/aws/dynamodb": false,
+		"alias/aws/s3":       false,
+		"arn:aws:kms:us-east-1:111111111111:alias/aws/rds": false,
+	}
+	for _, a := range got.Merged.Assets {
+		if _, ok := want[a.ResourceID]; !ok {
+			t.Errorf("unexpected/corrupted ResourceID %q in merged output", a.ResourceID)
+			continue
+		}
+		want[a.ResourceID] = true
+	}
+	for id, seen := range want {
+		if !seen {
+			t.Errorf("ResourceID %q lost or corrupted on merge round-trip", id)
+		}
+	}
+
+	// Streaming path must agree (single dedup code path via IdentityKey).
+	m := NewMerger("999999999999", false)
+	for _, s := range scans {
+		m.Add(s)
+	}
+	if sm := m.Finish(); sm.Merged.Summary.TotalAssets != 3 {
+		t.Fatalf("streaming TotalAssets = %d, want 3", sm.Merged.Summary.TotalAssets)
 	}
 }

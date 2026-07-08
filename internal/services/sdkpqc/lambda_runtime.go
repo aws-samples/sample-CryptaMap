@@ -32,7 +32,7 @@ type lambdaListFunctionsAPI interface {
 }
 
 // Scan lists Lambda functions and emits one asset per function with runtime info.
-// Pagination via Marker; capped at 1000 items.
+// Pagination via Marker; capped loudly at services.MaxAssetsPerScanner items.
 //
 // PQC posture is intentionally left UNKNOWN: neither ListFunctions nor GetFunction
 // exposes the SDK/CRT version bundled in the deployment package or the
@@ -57,7 +57,6 @@ func (s LambdaRuntimeScanner) Scan(ctx context.Context, cfg aws.Config) ([]model
 // empty success.
 func (s LambdaRuntimeScanner) scan(ctx context.Context, client lambdaListFunctionsAPI, accountID, region string) ([]models.CryptoAsset, error) {
 	assets := []models.CryptoAsset{}
-	const maxItems = 1000
 	var marker *string
 	for {
 		out, err := client.ListFunctions(ctx, &lambda.ListFunctionsInput{Marker: marker})
@@ -87,7 +86,10 @@ func (s LambdaRuntimeScanner) scan(ctx context.Context, client lambdaListFunctio
 			a.Properties["version"] = version
 			services.PostureProperty(&a, models.PostureUnknown)
 			assets = append(assets, a)
-			if len(assets) >= maxItems {
+			// Shared LOUD cap (25000 + stderr warning) instead of the old silent
+			// local 1000: silent truncation = under-reported crypto assets = a
+			// false all-clear (see services/common.go).
+			if services.TruncationCapReached(len(assets), s.Name(), region) {
 				return assets, nil
 			}
 		}

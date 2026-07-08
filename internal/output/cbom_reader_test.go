@@ -267,3 +267,122 @@ func TestResourceFromARN(t *testing.T) {
 		}
 	}
 }
+
+// TestParseCBOMUntrustedFileCannotOutrankLiveScan is a SECURITY regression: an
+// ingested CBOM file is untrusted input and must not be able to (a) declare
+// itself a "live" scan or (b) carry a Properties["source"] that wins merge
+// precedence. merge.sourceOf reads Properties["source"] FIRST (active-probe /
+// targeted-sdk outrank the mode-derived baselines), so a hand-edited file that
+// stamps source="active-probe" on its components would otherwise outrank a
+// genuine live scan on a dedup collision. The reader must strip "source" and
+// force a non-live mode.
+func TestParseCBOMUntrustedFileCannotOutrankLiveScan(t *testing.T) {
+	// A crafted single-asset CBOM that self-declares mode=live and tries to smuggle
+	// a high-precedence source onto its component.
+	scan := models.ScanResult{
+		ScanID:    "attacker-run",
+		AccountID: "999999999999",
+		Region:    "us-east-1",
+		Mode:      "live", // the file claims to be a live scan
+		Assets: []models.CryptoAsset{{
+			BomRef:      models.BomRefForARN("arn:aws:s3:::victim"),
+			Name:        "arn:aws:s3:::victim",
+			Service:     "s3",
+			AccountID:   "999999999999",
+			Region:      "us-east-1",
+			ResourceARN: "arn:aws:s3:::victim",
+			Properties: map[string]string{
+				"posture": string(models.PostureSymmetricOnly),
+				"source":  "active-probe", // attempt to win merge precedence
+			},
+		}},
+	}
+	raw, err := AsBytes(scan)
+	if err != nil {
+		t.Fatalf("AsBytes: %v", err)
+	}
+
+	shards, err := ParseCBOM(raw)
+	if err != nil {
+		t.Fatalf("ParseCBOM: %v", err)
+	}
+	if len(shards) != 1 {
+		t.Fatalf("shards=%d, want 1", len(shards))
+	}
+	got := shards[0]
+
+	// (a) mode must NOT be "live" for a file-reconstructed shard.
+	if got.Mode == "live" {
+		t.Errorf("ingested shard Mode=%q, want a non-live mode so merge precedence cannot favor file input", got.Mode)
+	}
+	// (b) the smuggled source property must be dropped, so sourceOf falls back to
+	// the (now non-live) mode rather than honoring "active-probe".
+	if len(got.Assets) != 1 {
+		t.Fatalf("assets=%d, want 1", len(got.Assets))
+	}
+	if src, present := got.Assets[0].Properties["source"]; present {
+		t.Errorf("Properties[\"source\"]=%q was restored from an untrusted file; it must be dropped", src)
+	}
+	// (c) the finding-suppressing symmetric-only posture claim must NOT be
+	// honored: this crafted asset carries NO corroborating cryptoProperties, so
+	// a one-field posture flip would otherwise silence the finding on ingest
+	// (BuildFindings skips symmetric-only entirely). It degrades to unknown
+	// (MEDIUM, needs investigation) with an audit note.
+	if got.Assets[0].Properties["posture"] != string(models.PostureUnknown) {
+		t.Errorf("uncorroborated symmetric-only posture must degrade to unknown, got %q", got.Assets[0].Properties["posture"])
+	}
+	if got.Assets[0].Properties["note"] == "" {
+		t.Error("degraded posture must carry an explanatory note for auditability")
+	}
+}
+
+// TestParseCBOMCorroboratedSymmetricOnlyRoundTrips is the fidelity counterpart
+// of the tamper test above: a symmetric-only posture that IS backed by the
+// component's own crypto evidence (AES-256 AlgorithmProperties, as every live
+// at-rest scanner emits) must round-trip verbatim, so legitimate offline
+// org-merge-files analysis regenerates the same inventory-only classification a
+// live scan produced.
+func TestParseCBOMCorroboratedSymmetricOnlyRoundTrips(t *testing.T) {
+	scan := models.ScanResult{
+		ScanID:    "legit-run",
+		AccountID: "123456789012",
+		Region:    "us-east-1",
+		Mode:      "test",
+		Assets: []models.CryptoAsset{{
+			BomRef:      models.BomRefForARN("arn:aws:s3:::legit"),
+			Name:        "arn:aws:s3:::legit",
+			Service:     "s3",
+			Category:    models.CategoryDataAtRest,
+			AccountID:   "123456789012",
+			Region:      "us-east-1",
+			ResourceARN: "arn:aws:s3:::legit",
+			Properties:  map[string]string{"posture": string(models.PostureSymmetricOnly)},
+			CryptoProps: models.CryptoProperties{
+				AssetType: models.AssetTypeAlgorithm,
+				AlgorithmProperties: &models.AlgorithmProperties{
+					Primitive:     models.PrimitiveAE,
+					AlgorithmName: "AES-256",
+					KeySizeBits:   256,
+				},
+			},
+		}},
+	}
+	raw, err := AsBytes(scan)
+	if err != nil {
+		t.Fatalf("AsBytes: %v", err)
+	}
+	shards, err := ParseCBOM(raw)
+	if err != nil {
+		t.Fatalf("ParseCBOM: %v", err)
+	}
+	if len(shards) != 1 || len(shards[0].Assets) != 1 {
+		t.Fatalf("expected 1 shard with 1 asset, got %+v", shards)
+	}
+	got := shards[0].Assets[0]
+	if got.Properties["posture"] != string(models.PostureSymmetricOnly) {
+		t.Errorf("corroborated symmetric-only posture must round-trip, got %q", got.Properties["posture"])
+	}
+	if note := got.Properties["note"]; note != "" {
+		t.Errorf("corroborated posture must not gain a degradation note, got %q", note)
+	}
+}

@@ -38,7 +38,11 @@ type directoryserviceFakeClient struct {
 type directoryserviceLDAPSResult struct {
 	status dstypes.LDAPSStatus
 	hasRow bool
-	err    error
+	// statuses, when non-empty, returns MULTIPLE LDAPSSettingInfo rows (one per
+	// status, in order) — modeling a Multi-Region MicrosoftAD directory whose
+	// per-region rows can disagree. Takes precedence over status/hasRow.
+	statuses []dstypes.LDAPSStatus
+	err      error
 }
 
 func (f *directoryserviceFakeClient) DescribeDirectories(ctx context.Context, in *directoryservice.DescribeDirectoriesInput, optFns ...func(*directoryservice.Options)) (*directoryservice.DescribeDirectoriesOutput, error) {
@@ -66,7 +70,11 @@ func (f *directoryserviceFakeClient) DescribeLDAPSSettings(ctx context.Context, 
 		return nil, res.err
 	}
 	out := &directoryservice.DescribeLDAPSSettingsOutput{}
-	if res.hasRow {
+	if len(res.statuses) > 0 {
+		for _, st := range res.statuses {
+			out.LDAPSSettingsInfo = append(out.LDAPSSettingsInfo, dstypes.LDAPSSettingInfo{LDAPSStatus: st})
+		}
+	} else if res.hasRow {
 		out.LDAPSSettingsInfo = []dstypes.LDAPSSettingInfo{{LDAPSStatus: res.status}}
 	}
 	return out, nil
@@ -199,5 +207,44 @@ func TestDirectoryServiceScanPostures(t *testing.T) {
 		if hasNote != tc.wantNote {
 			t.Errorf("%s: hasNote = %v, want %v", tc.id, hasNote, tc.wantNote)
 		}
+	}
+}
+
+// TestDirectoryServiceMultiRegionWeakestRowWins verifies the Multi-Region
+// MicrosoftAD contract: DescribeLDAPSSettings can return one row per region, and
+// the directory must be classified from the WEAKEST row. A directory with
+// [Enabled, Disabled] rows accepts plaintext LDAP in at least one region, so the
+// posture must be NoEncryption with ldapsStatus "Disabled" — reading only row[0]
+// would launder the Disabled region behind another region's Enabled state.
+func TestDirectoryServiceMultiRegionWeakestRowWins(t *testing.T) {
+	client := &directoryserviceFakeClient{
+		dirPages: []*directoryservice.DescribeDirectoriesOutput{
+			{
+				DirectoryDescriptions: []dstypes.DirectoryDescription{
+					{DirectoryId: directoryserviceStrptr("d-multiregion"), Type: dstypes.DirectoryTypeMicrosoftAd},
+				},
+			},
+		},
+		ldapsByID: map[string]directoryserviceLDAPSResult{
+			// Row 0 Enabled, row 1 Disabled: the weakest (Disabled) must win.
+			"d-multiregion": {statuses: []dstypes.LDAPSStatus{
+				dstypes.LDAPSStatusEnabled,
+				dstypes.LDAPSStatusDisabled,
+			}},
+		},
+	}
+	assets, err := DirectoryServiceScanner{}.scan(context.Background(), client, "111122223333", "us-east-1")
+	if err != nil {
+		t.Fatalf("scan returned unexpected error: %v", err)
+	}
+	a, ok := directoryserviceAssetByID(assets, "d-multiregion")
+	if !ok {
+		t.Fatal("expected the multi-region directory to appear as an asset")
+	}
+	if got := models.CryptoPosture(a.Properties["posture"]); got != models.PostureNoEncryption {
+		t.Errorf("posture=%q, want %q (any Disabled region means plaintext LDAP is accepted somewhere; weakest row wins)", got, models.PostureNoEncryption)
+	}
+	if got := a.Properties["ldapsStatus"]; got != "Disabled" {
+		t.Errorf("ldapsStatus=%q, want Disabled (must reflect the weakest row, not row[0]'s Enabled)", got)
 	}
 }

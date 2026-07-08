@@ -52,7 +52,24 @@ func (s SSMScanner) scan(ctx context.Context, client ssmAPI, accountID, region s
 		if err != nil {
 			return nil, fmt.Errorf("ssm DescribeParameters: %w", err)
 		}
-		for _, p := range out.Parameters {
+		// Cap the per-page batch to the remaining per-scanner budget: Parameter
+		// Store is routinely the most numerous resource type (advanced tier allows
+		// 100k+ parameters), so the accumulation must stay bounded and any
+		// truncation must be LOUD, never silent.
+		params := out.Parameters
+		if remaining := services.MaxAssetsPerScanner - len(assets); remaining < len(params) {
+			if remaining <= 0 {
+				services.TruncationCapReached(len(assets), s.Name(), region)
+				return assets, nil
+			}
+			params = params[:remaining]
+			// The cap lands mid-page: this page fills the shard exactly, so the
+			// remaining parameters here (and any later pages) are dropped. Emit the
+			// LOUD truncation warning now — the remaining<=0 branch above only fires
+			// on a SUBSEQUENT iteration, which never happens if this is the final page.
+			services.TruncationCapReached(services.MaxAssetsPerScanner, s.Name(), region)
+		}
+		for _, p := range params {
 			if p.Name == nil {
 				continue
 			}

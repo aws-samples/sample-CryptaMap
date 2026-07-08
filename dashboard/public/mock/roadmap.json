@@ -9495,7 +9495,7 @@
       "resourceArn": "arn:aws:alb:ap-south-1:111100000009:AWS::ElasticLoadBalancingV2::LoadBalancer/alb-0",
       "assetBomRef": "crypto-826ebb0b8b3b79f2",
       "posture": "unknown",
-      "severity": "HIGH",
+      "severity": "MEDIUM",
       "mosca": {
         "x": 7,
         "y": 1,
@@ -9525,7 +9525,7 @@
       "resourceArn": "arn:aws:nlb:ap-south-1:111100000009:AWS::ElasticLoadBalancingV2::LoadBalancer/nlb-0",
       "assetBomRef": "crypto-5b1044c2d8e6efe2",
       "posture": "unknown",
-      "severity": "HIGH",
+      "severity": "MEDIUM",
       "mosca": {
         "x": 7,
         "y": 1,
@@ -9555,7 +9555,7 @@
       "resourceArn": "arn:aws:transferfamily:ap-south-2:111100000005:AWS::Transfer::Server/transfer-0",
       "assetBomRef": "crypto-107decda3bb422d1",
       "posture": "unknown",
-      "severity": "HIGH",
+      "severity": "MEDIUM",
       "mosca": {
         "x": 7,
         "y": 1,
@@ -9585,7 +9585,7 @@
       "resourceArn": "arn:aws:cloudfront:ap-south-2:111100000003:AWS::CloudFront::Distribution/cf-dist-0",
       "assetBomRef": "crypto-159c83afe72b3ea7",
       "posture": "unknown",
-      "severity": "HIGH",
+      "severity": "MEDIUM",
       "mosca": {
         "x": 7,
         "y": 1,
@@ -9615,7 +9615,7 @@
       "resourceArn": "arn:aws:apigw_http:ap-south-2:111100000008:AWS::ApiGatewayV2::Api/apigw-http-0",
       "assetBomRef": "crypto-b4ff33f648ebe986",
       "posture": "unknown",
-      "severity": "HIGH",
+      "severity": "MEDIUM",
       "mosca": {
         "x": 7,
         "y": 1,
@@ -9645,7 +9645,7 @@
       "resourceArn": "arn:aws:appsync:ap-south-1:111100000009:AWS::AppSync::GraphQLApi/appsync-0",
       "assetBomRef": "crypto-9fdb2de29a201079",
       "posture": "unknown",
-      "severity": "HIGH",
+      "severity": "MEDIUM",
       "mosca": {
         "x": 7,
         "y": 1,
@@ -9675,7 +9675,7 @@
       "resourceArn": "arn:aws:iotcore:ap-south-2:111100000002:AWS::IoT::Thing/iot-0",
       "assetBomRef": "crypto-5c9ac57adb280e53",
       "posture": "unknown",
-      "severity": "HIGH",
+      "severity": "MEDIUM",
       "mosca": {
         "x": 7,
         "y": 1,
@@ -9705,7 +9705,7 @@
       "resourceArn": "arn:aws:iotcore:ap-south-2:111100000010:AWS::IoT::Thing/iot-0",
       "assetBomRef": "crypto-65c98fdffc75a258",
       "posture": "unknown",
-      "severity": "HIGH",
+      "severity": "MEDIUM",
       "mosca": {
         "x": 7,
         "y": 1,
@@ -9735,7 +9735,7 @@
       "resourceArn": "arn:aws:vpn:ap-south-1:111100000004:AWS::EC2::VPNConnection/vpn-00000000",
       "assetBomRef": "crypto-7fe29b3fb1d39f11",
       "posture": "unknown",
-      "severity": "HIGH",
+      "severity": "MEDIUM",
       "mosca": {
         "x": 7,
         "y": 1,
@@ -9765,7 +9765,7 @@
       "resourceArn": "arn:aws:vpn:ap-south-1:111100000010:AWS::EC2::VPNConnection/vpn-00000000",
       "assetBomRef": "crypto-d003d20e6f62ecda",
       "posture": "unknown",
-      "severity": "HIGH",
+      "severity": "MEDIUM",
       "mosca": {
         "x": 7,
         "y": 1,
@@ -32487,7 +32487,7 @@
       "maxPriority": 45,
       "sumPriority": 1229.1999999999998,
       "critical": 2,
-      "high": 25
+      "high": 24
     },
     {
       "accountId": "111100000007",
@@ -32503,7 +32503,7 @@
       "maxPriority": 45,
       "sumPriority": 1212.0999999999997,
       "critical": 5,
-      "high": 24
+      "high": 23
     },
     {
       "accountId": "111100000009",
@@ -32511,7 +32511,7 @@
       "maxPriority": 45,
       "sumPriority": 1289.9749999999997,
       "critical": 4,
-      "high": 25
+      "high": 22
     },
     {
       "accountId": "111100000001",
@@ -32527,7 +32527,7 @@
       "maxPriority": 31.5,
       "sumPriority": 1197.75,
       "critical": 2,
-      "high": 23
+      "high": 22
     },
     {
       "accountId": "111100000005",
@@ -32535,7 +32535,7 @@
       "maxPriority": 31.5,
       "sumPriority": 1281.2999999999995,
       "critical": 6,
-      "high": 27
+      "high": 26
     },
     {
       "accountId": "111100000006",
@@ -32559,7 +32559,7 @@
       "maxPriority": 22.9,
       "sumPriority": 1223.6,
       "critical": 2,
-      "high": 23
+      "high": 22
     },
     {
       "accountId": "111100000010",
@@ -32567,7 +32567,7 @@
       "maxPriority": 22.9,
       "sumPriority": 1151.8999999999996,
       "critical": 1,
-      "high": 32
+      "high": 30
     }
   ]
 }

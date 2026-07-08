@@ -1,6 +1,6 @@
 # CryptaMap Scaling: Large-Org Hardening & Distributed-Map Redesign
 
-**Status:** the safe fixes below are implemented; redesign items below are **design-only / propose** (not yet implemented).
+**Status:** the safe fixes below are implemented; of the redesign items, §4.1, §4.2, §4.4, and §4.5 are now **implemented**, §4.3 was **superseded** by the local-first redesign, and only the residual off-Lambda/disk-backed dedup term (§4.1 C/D) and browser-side scale remain open.
 **Target scale:** hundreds of AWS accounts × thousands of resources/account × many regions, with each unit of work fitting AWS Lambda's 15-minute / memory ceilings and scaling horizontally.
 
 This document records (1) the verified scalability bottlenecks, (2) the low-risk fixes already applied, and (3) the architectural redesign required for the bottlenecks that cannot be fixed safely in-place — chiefly the **terminal merge memory cliff**.
@@ -53,7 +53,7 @@ These are low-risk, in-place changes; full build (default + `-tags lambda`) and 
 - `EngineOptions.PerServiceCap` (previously declared but **never enforced** — dead config) is now applied in `Engine.Run`, letting an operator bound a single pathological service in one shard.
 
 ### Memory (mitigations — do NOT remove the §5 redesign need)
-- **Lambda merge download** is now **bounded-concurrent** (16 in flight) instead of strictly serial, removing the ~4-13 min serial-GET latency risk for thousand-shard runs; each shard is **stream-decoded** (`json.NewDecoder` on the body) instead of buffer-whole-body-then-Unmarshal, halving transient per-shard memory.
+- **Lambda merge download** is now **bounded-concurrent** (16 in flight) instead of strictly serial, removing the ~4-13 min serial-GET latency risk for thousand-shard runs. Each shard body is read into a per-object buffer (`bytes.Buffer.ReadFrom`, `cmd/cryptamap/lambda_merge.go:442-444`) and then unmarshalled; the concurrency cap (not per-object streaming) is what bounds transient memory — at most ~16 shard bodies are resident at once. (A true `json.NewDecoder` streaming decode per body is a possible future optimization; it is **not** implemented today.)
 - **CLI** drops each shard's heavy `Assets`/`Findings` slices after writing artifacts when `--org-merge` is **off** (only `Summary` is needed downstream), keeping peak memory ~flat across a many-region scan instead of growing per region. Verified: a 120 k-asset 4-region CLI scan peaked at ~1.65 GB RSS.
 
 ### Guards / observability
@@ -65,7 +65,7 @@ These are low-risk, in-place changes; full build (default + `-tags lambda`) and 
 
 ## 4. Redesign — orchestration/serving shape
 
-These changed the orchestration/serving shape rather than being safe in-place fixes. §4.1 and §4.2 are now **implemented**; §4.3 was **superseded** by the local-first redesign; §4.4–§4.5 remain open. Each item is labelled with its current status.
+These changed the orchestration/serving shape rather than being safe in-place fixes. §4.1, §4.2, §4.4, and §4.5 are now **implemented**; §4.3 was **superseded** by the local-first redesign. Each item is labelled with its current status.
 
 ### 4.1 Streaming / hierarchical merge — **IMPLEMENTED**
 Both the streaming primitive and the hierarchical orchestration are now built (this was previously propose-only):
@@ -82,21 +82,21 @@ Originally propose-only: the inline `itemsPath: $.seed.tuples` enumerated the tu
 ### 4.3 Dashboard / API serving — **SUPERSEDED by the local-first redesign**
 This section described a dies-at-scale problem in a serving layer that **no longer exists**: an earlier design proxied the entire merged CBOM/roadmap through a 256 MB query Lambda + API Gateway (breaking at ~4,000 components / 6 MB Lambda sync-response, ~6,400 / 10 MB API-GW; a 90 k-asset org produced a **156 MB** body). That query API + dashboard tier was **removed** in the local-first redesign — there is no deployed `/cbom`/`/roadmap` endpoint to overflow. The supported way to consume a large org CBOM is the **local/artifact path** (CLI output + `cryptamap serve` over loopback, or the signed HTML report), which has no Lambda/API-Gateway response ceiling. Browser-side scale (virtualized/paginated asset tables for very large CBOMs) remains a forward-looking dashboard-usability item, independent of any serving API.
 
-### 4.4 Orchestration robustness (risky, at fleet scale)
-- **No completion barrier:** `toleratedFailurePercentage: 25` (`org-fanout-stack.ts:262`) lets up to a quarter of shards vanish and the merge proceeds over whatever landed, with no expected-count check. Add a seed-emitted expected shard count and reconcile against the merge's observed shard count; surface the gap in coverage output.
-- **Region enablement:** the static `FANOUT_REGIONS` list is crossed with every account regardless of opt-in/disabled regions. `org.EnabledRegions` exists but is unwired. Resolve enabled regions per account (or document that opt-in regions must be enabled in targets first) to avoid wasted dead-region shards. *Efficiency, not availability — dead-region shards return SUCCEEDED, they do not burn the failure budget.*
+### 4.4 Orchestration robustness — **IMPLEMENTED**
+- **Completion barrier.** `toleratedFailurePercentage: 25` (`org-fanout-stack.ts:364`, and again for the account-merge Map at `:431`) still lets up to a quarter of shards fail, but the merge no longer proceeds over whatever landed with no expected-count check. The seed emits an `expectedShards` count computed **after** region filtering (`org-fanout-stack.ts:261`) and threads it into the terminal merge (`'expectedShards.$': '$.seed.expectedShards'`, `:470`). The merge reconciles the observed shard count against it and surfaces the gap — vanished/tolerated-failed shards become `MissingShards`/`FailedShards` rows and force `Complete=false` (`cmd/cryptamap/lambda_merge_core.go`), so a decimated run reads as INCOMPLETE, never as a clean smaller result.
+- **Region enablement.** The static region list is no longer crossed with every account blindly. The seed resolves each account's **enabled** regions by assuming its member role and calling `ec2:DescribeRegions` (`enabledRegionsFor`, `org-fanout-stack.ts:171`): in explicit-list mode it returns the enabled subset of the static regions (opt-in regions a member has not enabled are skipped — no dead shards); in `all` mode it returns the account's full enabled set. A discovery failure does not silently collapse to one region — the account is recorded in `regionDiscoveryFailedAccounts`, threaded into the merge (`:478`), and folded into `FailedShards` forcing `Complete=false` (see §6 Bug B).
 
-### 4.5 Per-shard inner concurrency (degraded, dense single regions)
-`s3` (`GetBucketEncryption` + per-SSE-KMS `DescribeKey`) and `dynamodb` (`DescribeTable`) make **serial per-resource** calls. A region with thousands of buckets/tables can push that one scanner past the 15-min shard timeout. Add a bounded inner worker pool (8-16) to those per-resource loops, reusing the engine's retry. *(Per-scanner refactor; deferred to keep this branch low-risk. `SecretsManager`/`RDS` do NOT need this — they read everything off the List page.)*
+### 4.5 Per-shard inner concurrency — **IMPLEMENTED**
+`s3` (`GetBucketEncryption` + per-SSE-KMS `DescribeKey`) and `dynamodb` (`DescribeTable`) no longer make **serial per-resource** calls. Both now fan those per-resource loops out through a bounded inner worker pool (`services.MapConcurrent`, `internal/services/common.go:352`, at `DefaultInnerConcurrency = 12`) — order-preserving and no extra retry (each call is a single SDK op whose adaptive retryer handles throttle; the engine's outer retry still wraps the whole `Scan`). See `internal/services/datarest/s3.go:140` and `internal/services/datarest/dynamodb.go:95`; the same primitive is reused across the other dense per-resource scanners (kms, athena, firehose, etc.). This keeps a region with thousands of buckets/tables inside the 15-min shard timeout. *(`SecretsManager`/`RDS` do NOT need this — they read everything off the List page.)*
 
 ---
 
 ## 5. Recommended sequencing
 
-Of the original sequence, **§4.1 hierarchical merge** and **§4.2 SFN S3 ItemReader** are now implemented, and **§4.3** (serving-layer overflow) was made moot by removing the query API in the local-first redesign. The remaining open work, in priority order:
+Of the original sequence, **§4.1 hierarchical merge**, **§4.2 SFN S3 ItemReader**, **§4.4 completion barrier + region enablement**, and **§4.5 inner concurrency** are now implemented, and **§4.3** (serving-layer overflow) was made moot by removing the query API in the local-first redesign. The remaining open work, in priority order:
 
-1. **§4.4 completion barrier** + **§4.5 inner concurrency** — robustness/throughput hardening.
-2. **Browser-side scale** — virtualized/paginated asset tables so very large org CBOMs render in the local dashboard without loading everything into the tab (dashboard usability, no serving API involved).
+1. **Browser-side scale** — virtualized/paginated asset tables so very large org CBOMs render in the local dashboard without loading everything into the tab (dashboard usability, no serving API involved).
+2. **Off-Lambda / disk-backed dedup for the residual merge term** — §4.1 (C)/(D): /tmp- or DynamoDB-backed dedup maps, or a Fargate/Batch merge, for an org whose *distinct* asset count alone exceeds a Lambda's memory. Lower priority now that the common case is bounded.
 
 ---
 
@@ -147,7 +147,7 @@ is exactly the kind of *false-clean* result the tool exists to prevent.
   ready.
 
 ### Re-test command
-`cd cdk && npx cdk deploy CryptaMap-OrgFanout --exclusively -c orgScanningEnabled=true -c fanoutRegions=all`
+`cd cdk && npx cdk deploy --all -c orgScanningEnabled=true -c fanoutRegions=all` (deploy the full app with org scanning enabled; avoid `--exclusively CryptaMap-OrgFanout`, which skips the trust/dependency stacks the fan-out relies on)
 then `aws stepfunctions start-execution --state-machine-arn <CryptaMapOrgScan> --input '{}'`;
 verify the seed tuple count ≈ accounts × enabled-regions and that region-discovery
 reported zero failures.

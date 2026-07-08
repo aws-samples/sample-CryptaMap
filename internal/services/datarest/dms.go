@@ -69,6 +69,9 @@ func (s DMSScanner) scan(ctx context.Context, client dmsAPI, accountID, region s
 			services.StampDocFactKeyed(&a, "datarest/dms/at-rest-aes256")
 			a.Properties["kmsKeyId"] = kmsKey
 			assets = append(assets, a)
+			if services.TruncationCapReached(len(assets), s.Name(), region) {
+				return assets, nil
+			}
 		}
 		if out.Marker == nil || *out.Marker == "" {
 			break

@@ -209,3 +209,40 @@ func TestSQSScanPostureClassification(t *testing.T) {
 		}
 	}
 }
+
+// TestSQSScanSetsMaxResults pins the pagination-enabling contract: per the SQS
+// API, ListQueues NEVER returns a NextToken unless MaxResults is set, so an
+// input without MaxResults silently truncates at ~1000 queues. Every ListQueues
+// call the scanner makes must therefore carry a positive MaxResults.
+func TestSQSScanSetsMaxResults(t *testing.T) {
+	client := &maxResultsRecordingSQSClient{}
+	if _, err := (SQSScanner{}).scan(context.Background(), client, "111122223333", "us-east-1"); err != nil {
+		t.Fatalf("scan returned unexpected error: %v", err)
+	}
+	if client.calls == 0 {
+		t.Fatal("expected at least one ListQueues call")
+	}
+	if client.sawNilMaxResults {
+		t.Error("ListQueues called without MaxResults; SQS never returns NextToken in that case, so pagination silently truncates at ~1000 queues")
+	}
+}
+
+// maxResultsRecordingSQSClient records whether any ListQueues call omitted
+// MaxResults (the real-service condition under which NextToken is never
+// returned and pagination is dead code).
+type maxResultsRecordingSQSClient struct {
+	calls            int
+	sawNilMaxResults bool
+}
+
+func (f *maxResultsRecordingSQSClient) ListQueues(ctx context.Context, in *sqs.ListQueuesInput, optFns ...func(*sqs.Options)) (*sqs.ListQueuesOutput, error) {
+	f.calls++
+	if in.MaxResults == nil || *in.MaxResults <= 0 {
+		f.sawNilMaxResults = true
+	}
+	return &sqs.ListQueuesOutput{}, nil
+}
+
+func (f *maxResultsRecordingSQSClient) GetQueueAttributes(ctx context.Context, in *sqs.GetQueueAttributesInput, optFns ...func(*sqs.Options)) (*sqs.GetQueueAttributesOutput, error) {
+	return &sqs.GetQueueAttributesOutput{}, nil
+}

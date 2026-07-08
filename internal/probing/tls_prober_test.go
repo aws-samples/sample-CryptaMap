@@ -1,8 +1,10 @@
 package probing
 
 import (
+	"context"
 	"crypto/tls"
 	"testing"
+	"time"
 )
 
 // TestIsPQHybridGroup locks the corrected PQ-hybrid detection: it must key off
@@ -42,5 +44,44 @@ func TestKexGroupName(t *testing.T) {
 		if got := kexGroupName(c.id); got != c.want {
 			t.Errorf("kexGroupName(%v) = %q, want %q", uint16(c.id), got, c.want)
 		}
+	}
+}
+
+// TestStripPortIPv6Safe pins the fix: stripPort must use
+// net.SplitHostPort semantics so a bracketed IPv6 literal is not mangled into a
+// broken ServerName (LastIndex(":") would cut inside the address).
+func TestStripPortIPv6Safe(t *testing.T) {
+	cases := map[string]string{
+		"example.com:443":  "example.com",
+		"[::1]:443":        "::1",
+		"[2001:db8::2]:8443": "2001:db8::2",
+		"example.com":      "example.com",
+	}
+	for in, want := range cases {
+		if got := stripPort(in); got != want {
+			t.Errorf("stripPort(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+// TestProbeHonorsContextCancellation pins the fix: Probe must propagate
+// ctx to the dial (tls.Dialer.DialContext), so a cancelled context returns
+// promptly instead of parking for the full Timeout.
+func TestProbeHonorsContextCancellation(t *testing.T) {
+	p := NewProber(30 * time.Second)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	start := time.Now()
+	// TEST-NET-1 (RFC 5737) is non-routable: without ctx propagation this dial
+	// would block toward the 30s Timeout.
+	res := p.Probe(ctx, "192.0.2.1", 443)
+	if elapsed := time.Since(start); elapsed > 5*time.Second {
+		t.Fatalf("Probe ignored cancelled context: took %v", elapsed)
+	}
+	if res.Reachable {
+		t.Errorf("cancelled probe must not report Reachable")
+	}
+	if res.Error == "" {
+		t.Errorf("cancelled probe must surface an error")
 	}
 }

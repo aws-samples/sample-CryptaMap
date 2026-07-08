@@ -41,6 +41,26 @@ type ScanResult struct {
 	Findings     []Finding           `json:"findings"`
 	ServiceStats []ServiceScanReport `json:"serviceStats,omitempty"`
 	ToolVersion  string              `json:"toolVersion"`
+	// Coverage, when non-nil, carries org-merge completion state so the emitted
+	// CBOM/roadmap can stamp it into their metadata. Absent (nil) for a single
+	// live scan, whose coverage question is trivially "just this shard"; the CBOM
+	// writer only emits the incompleteness properties when this is set.
+	Coverage *MergeCoverage `json:"coverage,omitempty"`
+}
+
+// MergeCoverage records the org-merge completion barrier so a consumer handed
+// only the merged CBOM (not the side-car summary JSON) can distinguish a
+// partial-coverage org scan from a clean one. It mirrors the loud-incomplete
+// fields of the merge summary; the CBOM writer stamps these into
+// metadata.properties as cryptamap:incomplete / expectedShards / observedShards
+// / missingShards / failedShardCount.
+type MergeCoverage struct {
+	Complete       bool `json:"complete"`
+	Incomplete     bool `json:"incomplete"`
+	ExpectedShards int  `json:"expectedShards"`
+	ObservedShards int  `json:"observedShards"`
+	MissingShards  int  `json:"missingShards"`
+	FailedShards   int  `json:"failedShards"`
 }
 
 // MultiScanResult bundles per-account/region results produced by an org scan.

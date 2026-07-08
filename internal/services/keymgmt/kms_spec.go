@@ -146,7 +146,7 @@ type kmsSpecAPI interface {
 }
 
 // Scan lists all KMS keys and emits one asset per key with spec/usage/origin metadata.
-// Pagination via Marker; capped at 1000 items.
+// Pagination via Marker; capped loudly at services.MaxAssetsPerScanner items.
 func (s KMSSpecScanner) Scan(ctx context.Context, cfg aws.Config) ([]models.CryptoAsset, error) {
 	client := kms.NewFromConfig(cfg)
 	accountID := services.AccountID(ctx, cfg)
@@ -178,24 +178,33 @@ func (s KMSSpecScanner) scan(ctx context.Context, client kmsSpecAPI, accountID, 
 			}
 			keys = keys[:remaining]
 		}
-		// DescribeKey per key concurrently (bounded, order-preserving). A nil KeyId,
-		// a DescribeKey error, or nil metadata drops the key (mirrors the old
-		// per-key `continue`).
+		// DescribeKey per key concurrently (bounded, order-preserving). A nil KeyId
+		// drops the entry (no identity to report); a DescribeKey error or nil
+		// metadata does NOT drop the key — it is still emitted with PostureUnknown
+		// so the inventory never silently under-counts on a partial deny/throttle
+		// (the same no-silent-drop doctrine kms_rotation implements and tests).
 		page := services.MapConcurrent(ctx, services.DefaultInnerConcurrency, keys,
 			func(ctx context.Context, k kmstypes.KeyListEntry) (models.CryptoAsset, bool) {
 				if k.KeyId == nil {
 					return models.CryptoAsset{}, false
 				}
-				d, derr := client.DescribeKey(ctx, &kms.DescribeKeyInput{KeyId: k.KeyId})
-				if derr != nil {
-					fmt.Fprintf(os.Stderr, "kms DescribeKey %s: %v\n", *k.KeyId, derr)
-					return models.CryptoAsset{}, false
-				}
-				meta := d.KeyMetadata
-				if meta == nil {
-					return models.CryptoAsset{}, false
-				}
 				id := *k.KeyId
+				d, derr := client.DescribeKey(ctx, &kms.DescribeKeyInput{KeyId: k.KeyId})
+				var meta *kmstypes.KeyMetadata
+				if derr != nil {
+					fmt.Fprintf(os.Stderr, "kms DescribeKey %s: %v\n", id, derr)
+				} else {
+					meta = d.KeyMetadata
+				}
+				if meta == nil {
+					// Metadata unreadable: emit the key visibly unclassified rather
+					// than vanishing it from the CBOM.
+					props := services.KeyMaterialProps("secret-key", models.StateUnknown, 0, "")
+					a := services.NewAsset("kms_spec", models.CategoryKeyManagement, accountID, region, id, "AWS::KMS::Key", props)
+					a.Properties["note"] = "DescribeKey failed or returned no metadata; key listed but unclassified"
+					services.PostureProperty(&a, models.PostureUnknown)
+					return a, true
+				}
 				keySpec := string(meta.KeySpec)
 				keyUsage := string(meta.KeyUsage)
 				origin := string(meta.Origin)

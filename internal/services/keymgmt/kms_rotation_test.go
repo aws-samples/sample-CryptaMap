@@ -345,3 +345,96 @@ func TestKMSRotationMLDSAIsPQCReady(t *testing.T) {
 		t.Errorf("ML-DSA key: expected PQCReady posture, got %q", p)
 	}
 }
+
+// TestKMSRotationStatusErrorNotFabricatedAsFalse guards the tri-state honesty
+// fix: when GetKeyRotationStatus FAILS for a rotation-applicable key (e.g. the
+// scan role lacks kms:GetKeyRotationStatus), the scanner must report
+// rotationEnabled="unknown" — NEVER a fabricated "false" that asserts a definite
+// "rotation is OFF" compliance verdict from a read that never happened.
+func TestKMSRotationStatusErrorNotFabricatedAsFalse(t *testing.T) {
+	client := &fakeKMSRotationClient{
+		listPages: []*kms.ListKeysOutput{
+			{Keys: []kmstypes.KeyListEntry{{KeyId: kmsRotationStrptr("key-rot-denied")}}},
+		},
+		describeByID: map[string]*kms.DescribeKeyOutput{
+			"key-rot-denied": kmsRotationDescribeOut(kmstypes.KeySpecSymmetricDefault, kmstypes.KeyUsageTypeEncryptDecrypt, kmstypes.OriginTypeAwsKms),
+		},
+		rotationErrByID: map[string]error{
+			"key-rot-denied": errors.New("AccessDeniedException: kms:GetKeyRotationStatus"),
+		},
+	}
+	assets, err := KMSRotationScanner{}.scan(context.Background(), client, "111122223333", "us-east-1")
+	if err != nil {
+		t.Fatalf("scan returned unexpected error: %v", err)
+	}
+	a, ok := kmsRotationAssetByID(assets)["key-rot-denied"]
+	if !ok {
+		t.Fatal("expected the key to still be emitted despite GetKeyRotationStatus error")
+	}
+	if a.Properties["rotationApplicable"] != "true" {
+		t.Errorf("rotation-applicable key: rotationApplicable=%q, want true", a.Properties["rotationApplicable"])
+	}
+	if got := a.Properties["rotationEnabled"]; got != "unknown" {
+		t.Errorf("GetKeyRotationStatus-failed key: rotationEnabled=%q, want \"unknown\" (a fabricated \"false\" asserts rotation-OFF from a denied read)", got)
+	}
+}
+
+// TestKMSRotationDescribeErrorNotStampedObserved guards provenance honesty: a
+// key whose DescribeKey FAILED had NO metadata observation, so it must NOT
+// carry the source=observed / confidence=high provenance stamp.
+func TestKMSRotationDescribeErrorNotStampedObserved(t *testing.T) {
+	client := &fakeKMSRotationClient{
+		listPages: []*kms.ListKeysOutput{
+			{Keys: []kmstypes.KeyListEntry{{KeyId: kmsRotationStrptr("key-describe-fail")}}},
+		},
+		describeErrByID: map[string]error{
+			"key-describe-fail": errors.New("AccessDeniedException: kms:DescribeKey"),
+		},
+	}
+	assets, err := KMSRotationScanner{}.scan(context.Background(), client, "111122223333", "us-east-1")
+	if err != nil {
+		t.Fatalf("scan returned unexpected error: %v", err)
+	}
+	a := kmsRotationAssetByID(assets)["key-describe-fail"]
+	if src := a.Properties["source"]; src == "observed" {
+		t.Errorf("DescribeKey-failed key: must NOT be stamped source=observed (no observation happened), got source=%q confidence=%q", src, a.Properties["confidence"])
+	}
+}
+
+// TestKMSRotationKeyStateNotHardcodedActive guards the lifecycle-state fix: a
+// PendingDeletion key must not be reported with an Active material state (the
+// prior hard-coded StateActive made disabled/pending-deletion keys look live).
+// It also asserts a future NextRotationDate is NOT written into the material's
+// UpdateDate (CycloneDX `update` means a past material update, not a schedule).
+func TestKMSRotationKeyStateNotHardcodedActive(t *testing.T) {
+	client := &fakeKMSRotationClient{
+		listPages: []*kms.ListKeysOutput{
+			{Keys: []kmstypes.KeyListEntry{{KeyId: kmsRotationStrptr("key-pending-del")}}},
+		},
+		describeByID: map[string]*kms.DescribeKeyOutput{
+			"key-pending-del": {
+				KeyMetadata: &kmstypes.KeyMetadata{
+					KeySpec:  kmstypes.KeySpecSymmetricDefault,
+					KeyUsage: kmstypes.KeyUsageTypeEncryptDecrypt,
+					Origin:   kmstypes.OriginTypeAwsKms,
+					KeyState: kmstypes.KeyStatePendingDeletion,
+				},
+			},
+		},
+	}
+	assets, err := KMSRotationScanner{}.scan(context.Background(), client, "111122223333", "us-east-1")
+	if err != nil {
+		t.Fatalf("scan returned unexpected error: %v", err)
+	}
+	a := kmsRotationAssetByID(assets)["key-pending-del"]
+	rcm := a.CryptoProps.RelatedCryptoMaterialProperties
+	if rcm == nil {
+		t.Fatal("expected RelatedCryptoMaterialProperties to be present")
+	}
+	if rcm.State == models.StateActive {
+		t.Errorf("PendingDeletion key: material state must not be Active, got %q", rcm.State)
+	}
+	if !rcm.UpdateDate.IsZero() {
+		t.Errorf("UpdateDate must stay zero (a future scheduled rotation is not a material update), got %v", rcm.UpdateDate)
+	}
+}

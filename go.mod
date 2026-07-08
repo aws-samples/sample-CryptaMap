@@ -1,6 +1,6 @@
 module github.com/aws-samples/cryptamap
 
-go 1.26.2
+go 1.26
 
 require (
 	github.com/aws/aws-cdk-go/awscdk/v2 v2.257.0
@@ -13,6 +13,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/apigateway v1.40.2
 	github.com/aws/aws-sdk-go-v2/service/apigatewayv2 v1.35.2
 	github.com/aws/aws-sdk-go-v2/service/appmesh v1.36.4
+	github.com/aws/aws-sdk-go-v2/service/appstream v1.60.5
 	github.com/aws/aws-sdk-go-v2/service/appsync v1.54.0
 	github.com/aws/aws-sdk-go-v2/service/athena v1.58.4
 	github.com/aws/aws-sdk-go-v2/service/backup v1.57.2
@@ -74,7 +75,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.102.2
 	github.com/aws/aws-sdk-go-v2/service/sagemaker v1.250.2
 	github.com/aws/aws-sdk-go-v2/service/secretsmanager v1.41.9
-	github.com/aws/aws-sdk-go-v2/service/securityhub v1.71.2
+	github.com/aws/aws-sdk-go-v2/service/sesv2 v1.62.4
 	github.com/aws/aws-sdk-go-v2/service/sfn v1.43.0
 	github.com/aws/aws-sdk-go-v2/service/signer v1.33.6
 	github.com/aws/aws-sdk-go-v2/service/sns v1.39.19
@@ -105,13 +106,11 @@ require (
 	github.com/aws/aws-sdk-go-v2/internal/configsources v1.4.29 // indirect
 	github.com/aws/aws-sdk-go-v2/internal/endpoints/v2 v2.7.29 // indirect
 	github.com/aws/aws-sdk-go-v2/internal/v4a v1.4.30 // indirect
-	github.com/aws/aws-sdk-go-v2/service/appstream v1.60.5 // indirect
 	github.com/aws/aws-sdk-go-v2/service/internal/accept-encoding v1.13.10 // indirect
 	github.com/aws/aws-sdk-go-v2/service/internal/checksum v1.9.18 // indirect
 	github.com/aws/aws-sdk-go-v2/service/internal/endpoint-discovery v1.12.2 // indirect
 	github.com/aws/aws-sdk-go-v2/service/internal/presigned-url v1.13.25 // indirect
 	github.com/aws/aws-sdk-go-v2/service/internal/s3shared v1.19.25 // indirect
-	github.com/aws/aws-sdk-go-v2/service/sesv2 v1.62.4 // indirect
 	github.com/aws/aws-sdk-go-v2/service/signin v1.1.1 // indirect
 	github.com/aws/aws-sdk-go-v2/service/sso v1.30.19 // indirect
 	github.com/aws/aws-sdk-go-v2/service/ssooidc v1.36.2 // indirect
@@ -132,9 +131,9 @@ require (
 	golang.org/x/crypto v0.51.0 // indirect
 	golang.org/x/lint v0.0.0-20241112194109-818c5a804067 // indirect
 	golang.org/x/mod v0.36.0 // indirect
-	golang.org/x/net v0.54.0 // indirect
+	golang.org/x/net v0.55.0 // indirect
 	golang.org/x/sync v0.20.0 // indirect
-	golang.org/x/sys v0.44.0 // indirect
+	golang.org/x/sys v0.45.0 // indirect
 	golang.org/x/telemetry v0.0.0-20260508192327-42602be52be6 // indirect
 	golang.org/x/text v0.37.0 // indirect
 	golang.org/x/tools v0.45.0 // indirect

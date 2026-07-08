@@ -80,11 +80,13 @@ func (m *Merger) Add(scan models.ScanResult) {
 		m.allMock = false // any non-mock shard makes the merge a real merge
 	}
 
-	// Assets (dedupAssets semantics).
+	// Assets (dedupAssets semantics — keyed on IdentityKey so slash-containing
+	// ResourceIDs are preserved verbatim and never collapse distinct resources).
 	for _, a := range scan.Assets {
+		key := a.IdentityKey()
 		cand := assetCandidate{asset: a, source: sourceOf(a, scan.Mode)}
-		if existing, ok := m.assets[a.BomRef]; !ok || preferAsset(cand, existing) {
-			m.assets[a.BomRef] = cand
+		if existing, ok := m.assets[key]; !ok || preferAsset(cand, existing) {
+			m.assets[key] = cand
 		}
 	}
 
@@ -164,9 +166,10 @@ func (m *Merger) AddPreMerged(merged models.ScanResult, coverage []Coverage) {
 	}
 
 	for _, a := range merged.Assets {
+		key := a.IdentityKey()
 		cand := assetCandidate{asset: a, source: sourceOf(a, merged.Mode)}
-		if existing, ok := m.assets[a.BomRef]; !ok || preferAsset(cand, existing) {
-			m.assets[a.BomRef] = cand
+		if existing, ok := m.assets[key]; !ok || preferAsset(cand, existing) {
+			m.assets[key] = cand
 		}
 	}
 	for _, f := range merged.Findings {
@@ -274,13 +277,14 @@ func (m *Merger) Finish() Result {
 	return Result{Merged: merged, Coverage: m.coverage, Multi: multi}
 }
 
-// sortedAssets mirrors dedupAssets' final sort (by BomRef).
+// sortedAssets mirrors dedupAssets' final sort (sortAssets: BomRef, then
+// ARN/Account/Region/ResourceID tiebreakers for BomRef-less assets).
 func (m *Merger) sortedAssets() []models.CryptoAsset {
 	out := make([]models.CryptoAsset, 0, len(m.assets))
 	for _, c := range m.assets {
 		out = append(out, c.asset)
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].BomRef < out[j].BomRef })
+	sortAssets(out)
 	return out
 }
 

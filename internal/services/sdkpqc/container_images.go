@@ -56,7 +56,7 @@ func (c ecrImagesClients) DescribeKey(ctx context.Context, in *kms.DescribeKeyIn
 // call for the type). In-image library PQC posture is NOT observable from any API
 // (real PQC check requires image content inspection), so it is left out of the
 // posture; image counts are recorded only as informational metadata.
-// Pagination via NextToken; capped at 1000 items.
+// Pagination via NextToken; capped loudly at services.MaxAssetsPerScanner items.
 func (s ContainerImagesScanner) Scan(ctx context.Context, cfg aws.Config) ([]models.CryptoAsset, error) {
 	client := ecrImagesClients{Client: ecr.NewFromConfig(cfg), kms: kms.NewFromConfig(cfg)}
 	accountID := services.AccountID(ctx, cfg)
@@ -72,7 +72,6 @@ func (s ContainerImagesScanner) Scan(ctx context.Context, cfg aws.Config) ([]mod
 // count and never drops the repository asset.
 func (s ContainerImagesScanner) scan(ctx context.Context, client ecrImagesAPI, accountID, region string) ([]models.CryptoAsset, error) {
 	assets := []models.CryptoAsset{}
-	const maxItems = 1000
 	var nextToken *string
 	for {
 		out, err := client.DescribeRepositories(ctx, &ecr.DescribeRepositoriesInput{NextToken: nextToken})
@@ -127,7 +126,10 @@ func (s ContainerImagesScanner) scan(ctx context.Context, client ecrImagesAPI, a
 				services.StampDocFactKeyed(&a, "sdkpqc/container_images/ecr-at-rest-encryption")
 			}
 			assets = append(assets, a)
-			if len(assets) >= maxItems {
+			// Shared LOUD cap (25000 + stderr warning) instead of the old silent
+			// local 1000: silent truncation = under-reported crypto assets = a
+			// false all-clear (see services/common.go).
+			if services.TruncationCapReached(len(assets), s.Name(), region) {
 				return assets, nil
 			}
 		}

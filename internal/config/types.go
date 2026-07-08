@@ -21,52 +21,38 @@ type OwnerInfo struct {
 	VendorPOC string `yaml:"vendor_poc"`
 }
 
+// ScanConfig holds CLI scan settings. NOTE: org-wide cross-account scanning is
+// NOT configured here — the deployed Step Functions fan-out passes the scanner
+// role/externalId in the Lambda event, and the CLI scan path is single-account.
 type ScanConfig struct {
 	Mode         string       `yaml:"mode"`
 	Regions      []string     `yaml:"regions"`
 	Accounts     []string     `yaml:"accounts"`
-	OrgScanning  OrgScanning  `yaml:"org_scanning"`
 	Concurrency  Concurrency  `yaml:"concurrency"`
 	RateLimiting RateLimiting `yaml:"rate_limiting"`
 	Profile      string       `yaml:"profile"`
-}
-
-type OrgScanning struct {
-	Enabled             bool   `yaml:"enabled"`
-	RoleName            string `yaml:"role_name"`
-	ManagementAccountID string `yaml:"management_account_id"`
-	ExternalID          string `yaml:"external_id"`
 }
 
 type Concurrency struct {
 	MaxGoroutines int `yaml:"max_goroutines"`
 }
 
+// RateLimiting tunes the engine's transient-error retry backoff. Jitter is
+// always applied by the engine and is not configurable.
 type RateLimiting struct {
-	MaxRetries  int  `yaml:"max_retries"`
-	BaseDelayMs int  `yaml:"base_delay_ms"`
-	MaxDelayMs  int  `yaml:"max_delay_ms"`
-	Jitter      bool `yaml:"jitter"`
+	MaxRetries  int `yaml:"max_retries"`
+	BaseDelayMs int `yaml:"base_delay_ms"`
+	MaxDelayMs  int `yaml:"max_delay_ms"`
 }
 
+// OutputConfig holds local artifact output settings. NOTE: the S3/DynamoDB
+// evidence-store writers (Lambda fan-out path) are configured via the
+// RESULTS_BUCKET / SCANS_TABLE / RETENTION_DAYS environment variables set by
+// the CDK, not via this YAML config.
 type OutputConfig struct {
-	S3          S3Output          `yaml:"s3"`
-	DynamoDB    DynamoDBOutput    `yaml:"dynamodb"`
 	SecurityHub SecurityHubOutput `yaml:"security_hub"`
 	Formats     OutputFormats     `yaml:"formats"`
 	LocalDir    string            `yaml:"local_dir"`
-}
-
-type S3Output struct {
-	Enabled    bool   `yaml:"enabled"`
-	BucketName string `yaml:"bucket_name"`
-	Prefix     string `yaml:"prefix"`
-}
-
-type DynamoDBOutput struct {
-	Enabled        bool   `yaml:"enabled"`
-	TableName      string `yaml:"table_name"`
-	RetentionScans int    `yaml:"retention_scans"`
 }
 
 // SecurityHubOutput holds the Security Hub ASFF product ARN stamped into the

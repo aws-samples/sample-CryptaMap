@@ -88,6 +88,16 @@ func (s VPCLatticeScanner) scan(ctx context.Context, client vpcLatticeAPI, certR
 					posture := models.PostureNonPQCClassical
 					props := services.TLSProtocolPropsDoc("1.2", "vpc-lattice-tls", "high",
 						"https://docs.aws.amazon.com/vpc-lattice/latest/ug/https-listeners.html")
+					passthrough := l.Protocol == vltypes.ListenerProtocolTlsPassthrough
+					if passthrough {
+						// TLS_PASSTHROUGH: Lattice does NOT terminate TLS — the
+						// version/ciphers/cert are whatever the backend target
+						// serves, which this API cannot see. Traffic is still TLS
+						// end-to-end (classical posture), but no version floor may
+						// be asserted and the service's ACM cert (Lattice-terminated
+						// HTTPS only) must not be attached as evidence.
+						props = services.TLSProtocolProps("", "vpc-lattice-tls-passthrough")
+					}
 					if l.Protocol == vltypes.ListenerProtocolHttp {
 						// Plaintext L7 — verified unencrypted.
 						posture = models.PostureNoEncryption
@@ -96,10 +106,24 @@ func (s VPCLatticeScanner) scan(ctx context.Context, client vpcLatticeAPI, certR
 					a := services.NewAsset("vpclattice", models.CategoryDataInTransit, accountID, region, *l.Arn, "AWS::VpcLattice::Listener", props)
 					services.PostureProperty(&a, posture)
 					a.Properties["protocol"] = string(l.Protocol)
-					if posture == models.PostureNonPQCClassical && certARN != "" {
+					if passthrough {
+						a.Properties["note"] = "TLS_PASSTHROUGH listener: TLS terminates at the backend target, so the negotiated version, ciphers, and certificate are not visible to VPC Lattice."
+					}
+					if posture == models.PostureNonPQCClassical && certARN != "" && !passthrough {
 						a.Properties["certificateArn"] = certARN
 						if isACMCertARN(certARN) {
 							resolveACMCert(ctx, certResolver, certARN, &a)
+						}
+					}
+					if posture == models.PostureNonPQCClassical && !passthrough {
+						// The HTTPS-listener classical-TLS verdict rests on the
+						// documented Lattice HTTPS-listener guarantee. resolveACMCert
+						// only stamps a cert SUB-CLAIM (never asset-level PropSource),
+						// so if nothing has stamped asset-level provenance, cite the
+						// doc so this verdict is not shipped unattributed.
+						if _, ok := a.Properties[services.PropSource]; !ok {
+							services.StampDocFact(&a, "high",
+								"https://docs.aws.amazon.com/vpc-lattice/latest/ug/https-listeners.html", "")
 						}
 					}
 					if posture == models.PostureNoEncryption {

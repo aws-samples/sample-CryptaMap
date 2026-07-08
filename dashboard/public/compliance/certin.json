@@ -1,5 +1,6 @@
 {
   "_comment": "MOCKUP/DESIGN data. Quotes taken from two public CERT-In primaries (see source links), re-verified 2026-06-12. This is the NATIONAL UMBRELLA view: CERT-In literally names 'CBOM' and 'automated cloud-native cryptographic discovery' — CryptaMap's exact category. HONESTY: these are advisory/recommended (whitepaper + technical guidelines), NOT an enforced sectoral mandate; that tier is disclosed.",
+  "draft": true,
   "framework": "CERTIN",
   "title": "CERT-In — Quantum Cyber Readiness & the CBOM/QBOM (national framing)",
   "asOf": "2026-06-12",

@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/aws-samples/cryptamap/pkg/models"
 )
@@ -97,6 +98,43 @@ func TestASFFFieldLimits(t *testing.T) {
 	}
 	if f.Severity.Normalized < 0 || f.Severity.Normalized > 100 {
 		t.Errorf("Severity.Normalized %d out of 0-100 range", f.Severity.Normalized)
+	}
+}
+
+// TestASFFRecommendationTextClamped proves an over-length Recommendation (sourced
+// from PQC how-to-enable text, which can be long) is clamped to the documented
+// 512-char Recommendation.Text limit and passes the contract validator —
+// unclamped, BatchImportFindings rejects the entire finding.
+func TestASFFRecommendationTextClamped(t *testing.T) {
+	scan := sampleASFFScan()
+	scan.Findings[0].Recommendation = strings.Repeat("R", 1000)
+	f := BuildASFFFinding(scan.Findings[0], "arn:aws:securityhub:ap-south-1:111122223333:product/111122223333/default")
+	if n := len([]rune(f.Remediation.Recommendation.Text)); n > asffMaxRecommendation {
+		t.Errorf("Recommendation.Text len %d exceeds %d", n, asffMaxRecommendation)
+	}
+	if err := ValidateASFFFinding(f); err != nil {
+		t.Errorf("clamped finding failed validation: %v", err)
+	}
+	// The validator must also catch an over-length Text on its own (the prior
+	// blind spot: writer and validator both missed Remediation entirely).
+	f.Remediation.Recommendation.Text = strings.Repeat("R", asffMaxRecommendation+1)
+	if err := ValidateASFFFinding(f); err == nil {
+		t.Error("validator accepted over-length Remediation.Recommendation.Text")
+	}
+}
+
+// TestASFFTruncateIDRuneSafe ensures a multi-byte UTF-8 rune straddling the
+// truncation boundary is dropped whole rather than split — a split rune emits
+// invalid UTF-8 in Id, which Security Hub may reject.
+func TestASFFTruncateIDRuneSafe(t *testing.T) {
+	// Place a 3-byte rune so it straddles the asffMaxID-9 (suffix) byte cut.
+	id := strings.Repeat("x", asffMaxID-10) + strings.Repeat("₹", 8) // ₹ = 3 bytes
+	got := asffTruncateID(id)
+	if !utf8.ValidString(got) {
+		t.Errorf("truncated id is not valid UTF-8: %q", got)
+	}
+	if len(got) > asffMaxID {
+		t.Errorf("truncated id len %d exceeds %d", len(got), asffMaxID)
 	}
 }
 

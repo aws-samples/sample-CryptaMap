@@ -3,6 +3,7 @@ import { Construct } from 'constructs';
 import * as s3 from 'aws-cdk-lib/aws-s3';
 import * as ddb from 'aws-cdk-lib/aws-dynamodb';
 import * as kms from 'aws-cdk-lib/aws-kms';
+import * as iam from 'aws-cdk-lib/aws-iam';
 
 export interface DataStackProps extends cdk.StackProps {
   readonly retentionScans: number;
@@ -17,7 +18,7 @@ export interface DataStackProps extends cdk.StackProps {
  * hosted dashboard read results is exactly the wrong shape for an org's full
  * crypto-weakness map — it puts a harvest-now-decrypt-later target list behind an
  * internet front door. The supported model is local-first: results are viewed
- * with `cryptamap serve ./out` (loopback) or pulled from this bucket by an
+ * with `cryptamap serve --dir ./out` (loopback) or pulled from this bucket by an
  * operator with their own credentials — never served from an internet-reachable
  * API. Only the data at rest lives here (all RETAINed + KMS-CMK encrypted).
  */
@@ -81,6 +82,37 @@ export class DataStack extends cdk.Stack {
       ],
     });
 
+    // Defense-in-depth (belt-and-suspenders): the bucket already defaults to
+    // KMS-CMK encryption above, and every writer (s3_writer.go, lambda_merge.go,
+    // the org-fanout seed) DELIBERATELY omits the SSE header so puts inherit the
+    // bucket CMK default. This Deny targets ONLY the explicit present-but-wrong
+    // case: a PutObject that DOES send an s3:x-amz-server-side-encryption header
+    // whose value is not aws:kms (e.g. a writer regression to SSE-S3/AES256),
+    // surfacing that regression as a hard 403 rather than silently landing
+    // evidence under a weaker at-rest posture. Header-less puts are ALLOWED and
+    // still inherit the CMK default.
+    //
+    // The Null condition is REQUIRED: a negated string operator (StringNotEquals)
+    // evaluates TRUE when the key is ABSENT, so without the Null guard this Deny
+    // would fire on every header-less put and 403 all legitimate writes. Pairing
+    // Null:'false' (header IS present) with StringNotEquals means BOTH must hold
+    // for the Deny to match — present AND wrong algorithm.
+    this.resultsBucket.addToResourcePolicy(new iam.PolicyStatement({
+      sid: 'DenyPutObjectWithoutKmsSse',
+      effect: iam.Effect.DENY,
+      principals: [new iam.AnyPrincipal()],
+      actions: ['s3:PutObject'],
+      resources: [this.resultsBucket.arnForObjects('*')],
+      conditions: {
+        Null: {
+          's3:x-amz-server-side-encryption': 'false',
+        },
+        StringNotEquals: {
+          's3:x-amz-server-side-encryption': 'aws:kms',
+        },
+      },
+    }));
+
     // Scans metadata table. RETAINed; encrypted with the same CMK; PITR on via
     // the non-deprecated pointInTimeRecoverySpecification API.
     //
@@ -101,6 +133,11 @@ export class DataStack extends cdk.Stack {
       encryption: ddb.TableEncryption.CUSTOMER_MANAGED,
       encryptionKey: this.dataKey,
       removalPolicy: cdk.RemovalPolicy.RETAIN,
+      // RETAIN only guards CloudFormation-driven deletion; deletionProtection
+      // additionally blocks a direct dynamodb:DeleteTable API call (which would
+      // otherwise destroy the evidence table in one call and take its PITR window
+      // with it). Consistent with the results bucket's tamper-evidence posture.
+      deletionProtection: true,
       pointInTimeRecoverySpecification: { pointInTimeRecoveryEnabled: true },
     });
     this.scansTable.addGlobalSecondaryIndex({

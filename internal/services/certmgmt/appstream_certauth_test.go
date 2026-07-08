@@ -95,6 +95,23 @@ func TestClassifyAppStreamCertAuth(t *testing.T) {
 			wantNoteContains: "ENABLED",
 		},
 		{
+			// A future/unrecognized status must NOT be described as disabled or
+			// assert password fallback: if AWS ships a new ENABLED-variant (as
+			// it already did with ENABLED_NO_DIRECTORY_LOGIN_FALLBACK), calling
+			// it "not enforced" would be a wrong factual statement.
+			name: "future_unknown_status_noncommittal",
+			cba: &asTypes.CertificateBasedAuthProperties{
+				Status: asTypes.CertificateBasedAuthStatus("ENABLED_FUTURE_MODE"),
+			},
+			wantOK:              true,
+			wantPosture:         models.PostureNonPQCClassical,
+			wantStatus:          "ENABLED_FUTURE_MODE",
+			wantFallback:        "", // must be ABSENT: enforcement is not asserted
+			wantCAArn:           "",
+			wantNoteContains:    "unrecognized status",
+			wantNoteNotContains: "DISABLED",
+		},
+		{
 			name:   "nil_block_skips_never_crashes",
 			cba:    nil,
 			wantOK: false,

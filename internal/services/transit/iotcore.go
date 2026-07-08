@@ -142,9 +142,12 @@ func (s IoTCoreScanner) describeDomainConfig(ctx context.Context, client iotCore
 		suite = "iot-tls"
 	}
 	props := services.TLSProtocolProps(ver, suite)
-	// The IoT SecurityPolicy enum is itself the documented TLS floor (empty when
-	// the policy is unknown so no floor is fabricated).
-	if props.ProtocolProperties != nil && ver != "" {
+	// The IoT SecurityPolicy enum is itself the documented TLS floor — but ONLY
+	// when the policy was actually observed. On the doc-default fallback the
+	// "1.3" default applies to NEW domain configurations and is overridable for
+	// existing ones, so writing it as TLSMinVersion would fabricate a floor a
+	// downstream "min TLS >= 1.3" check consumes as fact.
+	if props.ProtocolProperties != nil && ver != "" && observed {
 		props.ProtocolProperties.TLSMinVersion = ver
 	}
 	a := services.NewAsset("iotcore", models.CategoryDataInTransit, accountID, region, name, "AWS::IoT::DomainConfiguration", props)

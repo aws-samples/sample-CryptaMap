@@ -55,6 +55,9 @@ func (s SecretsRotationScanner) Scan(ctx context.Context, cfg aws.Config) ([]mod
 // success.
 func (s SecretsRotationScanner) scan(ctx context.Context, client secretsRotationAPI, kmsClient secretsRotationKMSAPI, accountID, region string) ([]models.CryptoAsset, error) {
 	assets := []models.CryptoAsset{}
+	// keySpecByID memoizes DescribeKey results (key id -> KeySpec, "" = failed
+	// or no metadata) for the whole scan, since many secrets share one CMK.
+	keySpecByID := map[string]string{}
 	var nextToken *string
 	for {
 		out, err := client.ListSecrets(ctx, &secretsmanager.ListSecretsInput{NextToken: nextToken})
@@ -129,10 +132,21 @@ func (s SecretsRotationScanner) scan(ctx context.Context, client secretsRotation
 			// kmsSpecPosture helper kms_spec uses; otherwise keep SymmetricOnly.
 			posture := models.PostureSymmetricOnly
 			if sec.KmsKeyId != nil && *sec.KmsKeyId != "" {
-				if d, derr := kmsClient.DescribeKey(ctx, &kms.DescribeKeyInput{KeyId: sec.KmsKeyId}); derr != nil {
-					fmt.Fprintf(os.Stderr, "secrets_rotation DescribeKey %s: %v\n", *sec.KmsKeyId, derr)
-				} else if d.KeyMetadata != nil {
-					keySpec := string(d.KeyMetadata.KeySpec)
+				// Memoized per scan: hundreds of secrets routinely share one CMK, so
+				// resolving each key id once (instead of one DescribeKey per secret)
+				// avoids an N+1 KMS call pattern and quota burn on secret-dense
+				// accounts. A DescribeKey failure memoizes as "" (keep the default).
+				keyID := *sec.KmsKeyId
+				keySpec, cached := keySpecByID[keyID]
+				if !cached {
+					if d, derr := kmsClient.DescribeKey(ctx, &kms.DescribeKeyInput{KeyId: sec.KmsKeyId}); derr != nil {
+						fmt.Fprintf(os.Stderr, "secrets_rotation DescribeKey %s: %v\n", keyID, derr)
+					} else if d.KeyMetadata != nil {
+						keySpec = string(d.KeyMetadata.KeySpec)
+					}
+					keySpecByID[keyID] = keySpec
+				}
+				if keySpec != "" {
 					a.Properties["kmsKeySpec"] = keySpec
 					posture = kmsSpecPosture(keySpec)
 				}

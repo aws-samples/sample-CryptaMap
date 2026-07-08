@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"context"
 	"testing"
 
 	"github.com/aws-samples/cryptamap/pkg/models"
@@ -270,5 +271,43 @@ func TestParseTLSDetails(t *testing.T) {
 	// No tlsDetails block at all -> ok=false.
 	if _, ok5 := parseTLSDetails(noTLS); ok5 {
 		t.Errorf("event without tlsDetails must yield ok=false")
+	}
+}
+
+// TestTLSPassMissingVersionNotFabricated guards the fabricated-evidence fix: a
+// CloudTrail tlsDetails block carrying a keyExchange but NO tlsVersion must
+// yield a transit asset with an EMPTY protocol version — never a hardcoded
+// "1.3". A classical group (x25519) is negotiable under TLS 1.2 as well, and
+// this asset class is stamped source=observed, so inventing a version would be
+// fabricated evidence in the strongest evidence tier. It drives the REAL scan
+// loop through a fake cloudTrailEvidenceAPI (not a mirrored helper call) so the
+// assertion holds against the code path production actually executes.
+func TestTLSPassMissingVersionNotFabricated(t *testing.T) {
+	raw := `{"eventSource":"kms.amazonaws.com","tlsDetails":{"cipherSuite":"TLS_AES_256_GCM_SHA384","keyExchange":"x25519"}}`
+	client := &fakeCloudTrailClient{unfilteredEvent: raw}
+
+	assets, err := CloudTrailEvidenceScanner{}.scan(context.Background(), client, "111122223333", "us-east-1")
+	if err != nil {
+		t.Fatalf("scan: %v", err)
+	}
+	found := false
+	for _, a := range assets {
+		if a.Properties["evidence"] != "runtime-tls" {
+			continue
+		}
+		found = true
+		pp := a.CryptoProps.ProtocolProperties
+		if pp == nil {
+			t.Fatal("runtime-tls asset has no ProtocolProperties")
+		}
+		if pp.Version != "" {
+			t.Errorf("missing tlsVersion must stay empty (unknown), got fabricated %q", pp.Version)
+		}
+		if pp.KeyExchangeGroup != "x25519" {
+			t.Errorf("KeyExchangeGroup = %q, want observed %q", pp.KeyExchangeGroup, "x25519")
+		}
+	}
+	if !found {
+		t.Fatal("scan emitted no runtime-tls asset for the keyExchange-only event")
 	}
 }

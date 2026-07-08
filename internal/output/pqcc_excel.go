@@ -3,6 +3,7 @@ package output
 import (
 	"fmt"
 	"io"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -130,10 +131,20 @@ func WritePQCCExcel(w io.Writer, scan models.ScanResult, opts PQCCOptions) error
 		{"High", scan.Summary.High},
 		{"Medium", scan.Summary.Medium},
 		{"Informational", scan.Summary.Informational},
+		// Reconcile the overview with the Baseline Inventory sheet: the symmetric-only
+		// (quantum-resistant at rest) assets are emitted as inventory rows there but
+		// are NOT findings, so surface their count here too — otherwise the overview
+		// under-represents the asset population the inventory rows actually list.
+		{"Inventory-only assets", scan.Summary.InventoryOnly},
 	}
 	for i, row := range overview {
-		cell, _ := excelize.CoordinatesToCellName(1, i+1)
-		f.SetSheetRow("Overview", cell, &row)
+		cell, err := excelize.CoordinatesToCellName(1, i+1)
+		if err != nil {
+			return err
+		}
+		if err := f.SetSheetRow("Overview", cell, &row); err != nil {
+			return err
+		}
 	}
 
 	// Baseline Inventory sheet
@@ -152,23 +163,30 @@ func WritePQCCExcel(w io.Writer, scan models.ScanResult, opts PQCCOptions) error
 	for i, h := range PQCCHeaders {
 		header[i] = h
 	}
-	f.SetSheetRow(sheet, "A1", &header)
+	if err := f.SetSheetRow(sheet, "A1", &header); err != nil {
+		return err
+	}
 
 	scanTime := scan.CompletedAt.UTC().Format("2006-01-02")
 	for i, finding := range scan.Findings {
 		row := i + 2
-		cell, _ := excelize.CoordinatesToCellName(1, row)
+		cell, err := excelize.CoordinatesToCellName(1, row)
+		if err != nil {
+			return err
+		}
 		fwSet := map[string]bool{}
 		for _, c := range finding.Compliance {
 			fwSet[c.Framework] = true
 		}
-		fwList := ""
+		// Sort the framework names before joining: map iteration order is
+		// randomized, and this evidence workbook must be byte-deterministic so
+		// two scans of the same state diff cleanly (a stated project invariant).
+		fws := make([]string, 0, len(fwSet))
 		for fw := range fwSet {
-			if fwList != "" {
-				fwList += ", "
-			}
-			fwList += fw
+			fws = append(fws, fw)
 		}
+		sort.Strings(fws)
+		fwList := strings.Join(fws, ", ")
 		vals := []interface{}{
 			strconv.Itoa(i + 1),
 			sanitizeCell(finding.ResourceID),
@@ -189,7 +207,53 @@ func WritePQCCExcel(w io.Writer, scan models.ScanResult, opts PQCCOptions) error
 			sanitizeCell(fwList),
 			scanTime,
 		}
-		f.SetSheetRow(sheet, cell, &vals)
+		// A dropped row here would silently under-report quantum-vulnerable
+		// assets in a regulator-facing evidence artifact, so fail loudly.
+		if err := f.SetSheetRow(sheet, cell, &vals); err != nil {
+			return err
+		}
+	}
+
+	// Inventory-only assets (B3): symmetric-only (quantum-resistant at rest,
+	// PostureSymmetricOnly) assets are deliberately NOT emitted as Findings, but a
+	// PQCC *inventory* workbook must still list them — otherwise the Baseline
+	// Inventory sheet silently under-reports the asset population that
+	// Summary.InventoryOnly reconciles. Emit them after the finding rows as
+	// "Resolved / Doesn't Need Attention" / Low-priority entries.
+	entry := len(scan.Findings)
+	for _, asset := range scan.Assets {
+		if asset.Properties == nil ||
+			asset.Properties["posture"] != string(models.PostureSymmetricOnly) {
+			continue
+		}
+		entry++
+		cell, err := excelize.CoordinatesToCellName(1, entry+1) // header offset: row = entry + 1
+		if err != nil {
+			return err
+		}
+		vals := []interface{}{
+			strconv.Itoa(entry),
+			sanitizeCell(asset.ResourceID),
+			"Cloud",
+			sanitizeCell(opts.OwnerName),
+			sanitizeCell(opts.OwnerEmail),
+			sanitizeCell(opts.OwnerPhone),
+			sanitizeCell(opts.OwnerOrgUnit),
+			sanitizeCell(coalesce(opts.VendorOrg, "Amazon Web Services")),
+			sanitizeCell(coalesce(opts.VendorPOC, "AWS Support")),
+			sanitizeCell(opts.VendorEmail),
+			PQCCAssetPQCNeedsValues[2], // "Resolved / Doesn't Need Attention"
+			sanitizeCell(fmt.Sprintf("%s — symmetric-only encryption (quantum-resistant at rest); inventory-only, no PQC migration required", asset.Name)),
+			"No change required",
+			"", // no disposition date: nothing to migrate
+			PQCCAssetPriorityValues[2], // "Low"
+			"Symmetric AES at rest is not Shor-vulnerable (Grover only halves effective strength)",
+			sanitizeCell(asset.Description),
+			scanTime,
+		}
+		if err := f.SetSheetRow(sheet, cell, &vals); err != nil {
+			return err
+		}
 	}
 
 	// Glossary sheet — minimal PQCC algorithm vulnerability table.
@@ -212,8 +276,13 @@ func WritePQCCExcel(w io.Writer, scan models.ScanResult, opts PQCCOptions) error
 		{"SLH-DSA", "Signature", "No", "(target, hash-based)"},
 	}
 	for i, row := range glossary {
-		cell, _ := excelize.CoordinatesToCellName(1, i+1)
-		f.SetSheetRow("Glossary", cell, &row)
+		cell, err := excelize.CoordinatesToCellName(1, i+1)
+		if err != nil {
+			return err
+		}
+		if err := f.SetSheetRow("Glossary", cell, &row); err != nil {
+			return err
+		}
 	}
 
 	if _, err := f.WriteTo(w); err != nil {

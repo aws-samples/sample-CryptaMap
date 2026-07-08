@@ -2,7 +2,9 @@ package compliance
 
 import "github.com/aws-samples/cryptamap/pkg/models"
 
-// CISAMapper — CISA M-23-02 cryptographic inventory requirements.
+// CISAMapper — OMB Memorandum M-23-02 cryptographic inventory requirements
+// (M-23-02 is an OMB memorandum; CISA operates the inventory intake — the
+// framework ID keeps the legacy "CISA_M2302" label for config compatibility).
 // Items 4 (algorithm), 5 (service type), 6 (key length) are the three items
 // automatable by ACDI tools. CryptaMap collects all three.
 type CISAMapper struct{}
@@ -37,9 +39,10 @@ func (m *CISAMapper) Map(asset models.CryptoAsset, posture models.CryptoPosture)
 			Framework:    CISA,
 			ControlID:    "M-23-02-MIGRATION",
 			ControlName:  "Prioritized migration plan",
-			Status:       "non-compliant",
-			Remediation:  "Submit findings to agency CIO for prioritized PQC migration planning per M-23-02 § 4.",
-			DeadlineDate: "2027-12-31",
+			Status:      "non-compliant",
+			Remediation: "Submit findings to agency CIO for prioritized PQC migration planning per M-23-02 § 4. M-23-02 sets an annual inventory cadence (first due May 2023, through 2035); it publishes no single migration deadline, so none is asserted here.",
+			// No DeadlineDate: a prior hardcoded "2027-12-31" appears nowhere in
+			// M-23-02 and was unverifiable (fabricated-deadline class).
 		})
 	}
 	return out

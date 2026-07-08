@@ -12,39 +12,49 @@ import (
 )
 
 // cloudFrontPosture maps a CloudFront distribution's MinimumProtocolVersion to a
-// crypto posture for the viewer-connection KEY EXCHANGE channel.
+// crypto posture for the viewer-connection channel.
 //
-// CloudFront's MinimumProtocolVersion is a negotiation FLOOR, not a ceiling: the
-// supported-protocols matrix shows TLS 1.3 available under EVERY CloudFront
-// security policy, so a TLS-1.3-capable client negotiates the quantum-resistant hybrid
-// groups (X25519MLKEM768) opportunistically regardless of the floor. Classifying
-// a low-floor policy (SSLv3 / TLSv1 / TLSv1_2016 / TLSv1.1_2016) as LegacyTLS on
-// the floor alone was a FALSE-ALARM — those distributions DO offer TLS 1.3 + ML-
-// KEM. The weak floor is still a real concern (a downgrade-capable client can fall
-// back to legacy TLS), but that is surfaced as a separate warning on the floor
-// field (see cloudFrontFloorWarning), not by denying the PQC-hybrid capability.
+// HONESTY CONTRACT: the ONLY per-distribution fact this scanner reads is
+// MinimumProtocolVersion — a negotiation FLOOR. Nothing in ListDistributions
+// proves that TLS 1.3 was negotiated or that a hybrid ML-KEM group was ever
+// selected, so this function must NEVER return PosturePQCHybrid: that posture
+// maps to SeverityInformational and would suppress every PQC-migration finding
+// on evidence we do not have. AWS documents that TLS 1.3 + ML-KEM is OFFERED
+// under every CloudFront security policy — that documented capability is
+// recorded as a doc-fact property on the asset (see scan), not as a posture.
+//
+//   - ""       -> PostureUnknown: the floor could not be read; assert nothing.
+//   - SSLv3 / TLSv1 / TLSv1_2016 / TLSv1.1_2016 -> PostureLegacyTLS: the policy
+//     PROVABLY permits legacy SSL/TLS negotiation, which is a real (non-
+//     Informational) finding regardless of what stronger versions are also
+//     offered.
+//   - TLSv1.2_* / TLSv1.3_* -> PostureNonPQCClassical: a modern floor is
+//     proven, but hybrid key exchange is not, so the distribution is
+//     classical until a negotiated PQ group is actually observed.
 func cloudFrontPosture(minProtocolVersion string) models.CryptoPosture {
-	if minProtocolVersion == "" {
-		// Unknown/unreadable floor: be conservative, do not assert quantum-resistant.
+	switch minProtocolVersion {
+	case "":
+		return models.PostureUnknown
+	case "SSLv3", "TLSv1", "TLSv1_2016", "TLSv1.1_2016":
+		return models.PostureLegacyTLS
+	default:
+		// TLSv1.2_2018/2019/2021/2025 and TLSv1.3_2025: floor >= TLS 1.2 is
+		// proven from the API-read policy; PQ-hybrid negotiation is not.
 		return models.PostureNonPQCClassical
 	}
-	// All CloudFront security policies allow TLS 1.3 negotiation, so the hybrid
-	// ML-KEM groups are available opportunistically on every distribution.
-	return models.PosturePQCHybrid
 }
 
-// cloudFrontFloorWarning returns a downgrade-fallback warning when the policy's
-// floor permits legacy TLS (SSLv3 / 1.0 / 1.1), else "". The distribution still
-// offers TLS 1.3 + ML-KEM (so posture stays PQCHybrid), but a downgrade-capable
-// client can negotiate the legacy floor and bypass the post-quantum key exchange.
+// cloudFrontFloorWarning returns a legacy-floor warning when the policy's floor
+// permits legacy SSL/TLS (SSLv3 / 1.0 / 1.1), else "". This supplements the
+// PostureLegacyTLS classification with the concrete downgrade concern.
 func cloudFrontFloorWarning(minProtocolVersion string) string {
 	switch minProtocolVersion {
 	case "SSLv3":
-		return "minimum protocol version SSLv3 permits a legacy SSL/TLS downgrade; a downgrade-capable client can bypass the TLS 1.3 / ML-KEM key exchange"
+		return "minimum protocol version SSLv3 permits legacy SSL/TLS negotiation; clients can connect with protocols far below TLS 1.2"
 	case "TLSv1", "TLSv1_2016":
-		return "minimum protocol version permits a legacy TLS 1.0 downgrade; a downgrade-capable client can bypass the TLS 1.3 / ML-KEM key exchange"
+		return "minimum protocol version permits TLS 1.0 negotiation; clients can connect below TLS 1.2"
 	case "TLSv1.1_2016":
-		return "minimum protocol version permits a legacy TLS 1.1 downgrade; a downgrade-capable client can bypass the TLS 1.3 / ML-KEM key exchange"
+		return "minimum protocol version permits TLS 1.1 negotiation; clients can connect below TLS 1.2"
 	default:
 		return ""
 	}
@@ -71,7 +81,8 @@ func cloudFrontFloor(minProtocolVersion string) string {
 
 // CloudFrontScanner emits one data-in-transit asset per distribution, with a
 // posture derived from the distribution's MinimumProtocolVersion (see
-// cloudFrontPosture) — NOT a hardcoded PosturePQCHybrid.
+// cloudFrontPosture). It never asserts a negotiated TLS version or a PQ-hybrid
+// posture from the floor alone.
 type CloudFrontScanner struct{}
 
 func (CloudFrontScanner) Name() string              { return "cloudfront" }
@@ -126,11 +137,13 @@ func (s CloudFrontScanner) scan(ctx context.Context, client cloudFrontAPI, certR
 				}
 			}
 			posture := cloudFrontPosture(minVer)
-			// Highest negotiable version is TLS 1.3 wherever a floor is known (all
-			// policies allow TLS 1.3); only an unreadable floor leaves it unasserted.
-			tlsVer := "1.3"
-			if minVer == "" {
-				tlsVer = ""
+			// Version is asserted ONLY when the floor proves it: a TLSv1.3_2025
+			// floor permits nothing below TLS 1.3, so 1.3 is the only possible
+			// version. Every other floor allows a range, and the negotiated
+			// version is not observed — leave it unasserted.
+			tlsVer := ""
+			if minVer == "TLSv1.3_2025" {
+				tlsVer = "1.3"
 			}
 			props := services.TLSProtocolProps(tlsVer, minVer)
 			if props.ProtocolProperties != nil {
@@ -138,9 +151,28 @@ func (s CloudFrontScanner) scan(ctx context.Context, client cloudFrontAPI, certR
 				// highest negotiable version). Empty for SSLv3/unreadable.
 				props.ProtocolProperties.TLSMinVersion = cloudFrontFloor(minVer)
 			}
-			a := services.NewAsset("cloudfront", models.CategoryDataInTransit, accountID, region, *d.Id, "AWS::CloudFront::Distribution", props)
+			// CloudFront is a GLOBAL service: ListDistributions returns the same
+			// distributions from every region shard. Use the SDK's region-less
+			// distribution ARN as the canonical dedup key so N region scans merge
+			// into one asset instead of N duplicates (see NewAssetWithARN).
+			arn := ""
+			if d.ARN != nil {
+				arn = *d.ARN
+			} else {
+				arn = fmt.Sprintf("arn:aws:cloudfront::%s:distribution/%s", accountID, *d.Id)
+			}
+			a := services.NewAssetWithARN(arn, "cloudfront", models.CategoryDataInTransit, accountID, region, *d.Id, "AWS::CloudFront::Distribution", props)
 			services.PostureProperty(&a, posture)
 			a.Properties["minimumProtocolVersion"] = minVer
+			// AWS documents that TLS 1.3 (and its hybrid ML-KEM groups) is offered
+			// under every CloudFront security policy. Record that as a doc-fact
+			// CAPABILITY only — negotiation is never observed here, so it must not
+			// upgrade the posture to PQCHybrid.
+			a.Properties["mlkemCapable"] = "true"
+			a.Properties["mlkemCapableSource"] = "aws-doc"
+			if minVer == "" {
+				a.Properties["note"] = "ViewerCertificate.MinimumProtocolVersion could not be read from ListDistributions; the TLS floor and negotiated protocol version cannot be proven for this distribution."
+			}
 			if w := cloudFrontFloorWarning(minVer); w != "" {
 				a.Properties["warning"] = w
 			}

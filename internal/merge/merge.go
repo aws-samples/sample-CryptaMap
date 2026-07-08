@@ -118,15 +118,18 @@ type assetCandidate struct {
 	source Source
 }
 
-// dedupAssets keys on a.BomRef (models.BomRefForARN). On collision it keeps the
-// higher Source; ties are broken by richer asset (more Properties keys), then
-// later DiscoveredAt, then lexicographically smaller ResourceARN. Returns
-// assets sorted by BomRef for deterministic output.
+// dedupAssets keys on a.IdentityKey() (BomRef when present, else the
+// deterministic ARN-derived ref, else a composite that carries the FULL
+// ResourceID verbatim — slash-containing IDs like "alias/aws/dynamodb" are
+// never split or truncated, so distinct resources cannot collapse). On
+// collision it keeps the higher Source; ties are broken by richer asset (more
+// Properties keys), then later DiscoveredAt, then lexicographically smaller
+// ResourceARN. Returns assets sorted by BomRef for deterministic output.
 func dedupAssets(scans []models.ScanResult) []models.CryptoAsset {
 	best := make(map[string]assetCandidate)
 	for _, scan := range scans {
 		for _, a := range scan.Assets {
-			key := a.BomRef
+			key := a.IdentityKey()
 			cand := assetCandidate{asset: a, source: sourceOf(a, scan.Mode)}
 			existing, ok := best[key]
 			if !ok || preferAsset(cand, existing) {
@@ -138,10 +141,29 @@ func dedupAssets(scans []models.ScanResult) []models.CryptoAsset {
 	for _, c := range best {
 		out = append(out, c.asset)
 	}
-	sort.Slice(out, func(i, j int) bool {
-		return out[i].BomRef < out[j].BomRef
-	})
+	sortAssets(out)
 	return out
+}
+
+// sortAssets orders merged assets deterministically: by BomRef, then (for
+// BomRef-less ingested assets that would otherwise tie on "") by ResourceARN,
+// AccountID, Region, and full ResourceID.
+func sortAssets(out []models.CryptoAsset) {
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].BomRef != out[j].BomRef {
+			return out[i].BomRef < out[j].BomRef
+		}
+		if out[i].ResourceARN != out[j].ResourceARN {
+			return out[i].ResourceARN < out[j].ResourceARN
+		}
+		if out[i].AccountID != out[j].AccountID {
+			return out[i].AccountID < out[j].AccountID
+		}
+		if out[i].Region != out[j].Region {
+			return out[i].Region < out[j].Region
+		}
+		return out[i].ResourceID < out[j].ResourceID
+	})
 }
 
 // preferAsset reports whether cand should replace existing for the same BomRef.
@@ -161,11 +183,21 @@ func preferAsset(cand, existing assetCandidate) bool {
 
 // findingKey builds the dedup key for a finding. It keys on
 // (AssetBomRef + Service + Posture); findings with an empty AssetBomRef fall
-// back to keying on (ResourceARN + Service + Posture).
+// back to keying on (ResourceARN + Service + Posture), and when the ARN is
+// also empty, on the full (AccountID + Region + ResourceID) identity. The
+// ResourceID is used VERBATIM — slash-containing IDs (e.g. KMS
+// "alias/aws/dynamodb") are never split or truncated — and NUL separators
+// prevent ambiguous concatenation, so two genuinely distinct resources can
+// never collapse to one finding key.
 func findingKey(f models.Finding) string {
 	ref := f.AssetBomRef
 	if ref == "" {
 		ref = f.ResourceARN
+	}
+	if ref == "" {
+		// ARN-less fallback: preserve full resource identity so distinct
+		// resources sharing (Service, Posture) are not silently dropped.
+		ref = f.AccountID + "\x00" + f.Region + "\x00" + f.ResourceID
 	}
 	return ref + "\x00" + f.Service + "\x00" + string(f.Posture)
 }

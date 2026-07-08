@@ -11,6 +11,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/aws-samples/cryptamap/internal/compliance"
+	cmconfig "github.com/aws-samples/cryptamap/internal/config"
 	"github.com/aws-samples/cryptamap/internal/merge"
 	"github.com/aws-samples/cryptamap/internal/output"
 	"github.com/aws-samples/cryptamap/internal/scanner"
@@ -25,12 +26,14 @@ type orgMergeFilesFlags struct {
 	verbose    bool
 }
 
-// defaultMergeFrameworks mirrors config.Default().Compliance.Frameworks so the
+// defaultMergeFrameworks derives the framework list from
+// config.Default().Compliance.Frameworks (the single source of truth) so the
 // regenerated findings carry the same compliance mappings a live scan would.
-var defaultMergeFrameworks = []string{
-	"SEBI_CSCRF", "RBI_BANK_IN", "IRDAI_ICSG",
-	"CISA_M2302", "MITRE_PQCC", "CNSA_2_0", "EU_NIS2_DORA",
-	"CANADA_PQC", "EUROPOL_QSFF",
+// A hardcoded mirror here previously risked silent drift: a framework added to
+// the config default would have been missing from merged findings with no
+// failure signal.
+func defaultMergeFrameworks() []string {
+	return cmconfig.Default().Compliance.Frameworks
 }
 
 // newOrgMergeFilesCmd builds the `cryptamap org-merge-files` subcommand. It
@@ -81,7 +84,7 @@ func runOrgMergeFiles(f orgMergeFilesFlags) error {
 
 	frameworks := f.frameworks
 	if len(frameworks) == 0 {
-		frameworks = defaultMergeFrameworks
+		frameworks = defaultMergeFrameworks()
 	}
 	complianceReg := compliance.NewRegistry(frameworks)
 
@@ -92,6 +95,18 @@ func runOrgMergeFiles(f orgMergeFilesFlags) error {
 		shards, err := output.ParseCBOMFile(path)
 		if err != nil {
 			return err
+		}
+		// LOUD warning when an input contributes nothing: a corrupted/truncated
+		// per-account partial (or a stray non-CBOM .json swept up from --in)
+		// parses to zero shards, so that account would otherwise silently vanish
+		// from the merged CBOM AND the coverage matrix — the exact "account
+		// silently treated as clean" failure the coverage matrix exists to
+		// prevent. Name the file so the operator can investigate.
+		if len(shards) == 0 {
+			fmt.Fprintf(os.Stderr,
+				"[org-merge-files] WARNING: %s contributed ZERO scan shards (not a CryptaMap CBOM, or corrupted/truncated) — any account it represented is ABSENT from the merged output and coverage matrix\n",
+				path)
+			continue
 		}
 		for i := range shards {
 			shards[i].Findings = scanner.BuildFindings(shards[i].Assets, complianceReg, nil)
@@ -109,7 +124,7 @@ func runOrgMergeFiles(f orgMergeFilesFlags) error {
 	output.SortScansByAccountRegion(scans)
 	res := merge.Merge(scans, merge.SentinelAccount)
 
-	if err := os.MkdirAll(f.outputDir, 0o755); err != nil {
+	if err := os.MkdirAll(f.outputDir, 0o700); err != nil {
 		return err
 	}
 	prefix := fmt.Sprintf("cryptamap-org-%s", res.Merged.CompletedAt.Format("20060102T150405Z"))
@@ -128,10 +143,15 @@ func runOrgMergeFiles(f orgMergeFilesFlags) error {
 		return err
 	}
 
-	// Coverage matrix.
+	// Coverage matrix. Propagate write failures: the matrix exists precisely so
+	// no account is silently treated as clean, so it must not silently be missing.
 	covPath := filepath.Join(f.outputDir, prefix+".coverage.json")
-	if cb, err := json.MarshalIndent(res.Coverage, "", "  "); err == nil {
-		_ = os.WriteFile(covPath, cb, 0o644)
+	cb, err := json.MarshalIndent(res.Coverage, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshal coverage matrix: %w", err)
+	}
+	if err := os.WriteFile(covPath, cb, 0o600); err != nil {
+		return err
 	}
 
 	fmt.Fprintf(os.Stderr, "[org-merge-files] %d file(s) → %d shards → %d deduped assets, %d findings (CRIT %d / HIGH %d / MED %d / INFO %d)\n",
@@ -228,7 +248,7 @@ func resolveCBOMInputs(in []string) ([]string, error) {
 // writeFile is a tiny helper that creates path and runs fn against the open
 // file, always closing it.
 func writeFile(path string, fn func(w *os.File) error) error {
-	fb, err := os.Create(path)
+	fb, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
 	if err != nil {
 		return err
 	}

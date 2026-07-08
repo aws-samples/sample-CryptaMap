@@ -151,8 +151,10 @@ The two import-discipline boundaries worth internalizing:
    `internal/roadmap`, `internal/pqc`, and `internal/taxonomy` are pure and
    stdlib-light by design (`internal/merge/merge.go:1-18`,
    `internal/roadmap/roadmap.go:1-25`), so they are unit-testable and free of
-   import-cycle risk. This is what lets the *offline* `org-merge-files` path and the
-   Lambda merge regenerate identical findings without any AWS calls.
+   import-cycle risk. This is what lets the *offline* `org-merge-files` path
+   regenerate findings without any AWS calls, and lets the Lambda merge core
+   (`lambda_merge_core.go`) fold raw shards — whose findings it preserves verbatim
+   rather than regenerating — as a pure, unit-testable function.
 
 ---
 
@@ -256,10 +258,12 @@ just not alarmed) while genuinely-vulnerable postures keep the worse-of behavior
 (`internal/scanner/mock_engine.go:34` calls `e.buildFindings`), and the offline
 `org-merge-files` path (`cmd/cryptamap/org_merge_files.go:97`) all call it and get
 **identical classification** for the same input asset — same posture, severity, Mosca
-score, and compliance mappings. (It is *not* byte-identical: every `Finding` also gets
-a fresh random `ID: uuid.NewString()` and `CreatedAt`/`UpdatedAt = time.Now().UTC()` —
-`findings.go:56,72-73` — so purity tests must compare the classification fields and
-exclude the UUID and timestamps.)
+score, and compliance mappings. (It is *not* byte-identical: every `Finding` gets
+per-run timestamps `CreatedAt`/`UpdatedAt = time.Now().UTC()` (one `now` per call) —
+`findings.go:29,92-93`. `Finding.ID` is now a **deterministic** content key
+(`ID: stableFindingID(a, posture)`, `findings.go:76`, helper `findings.go:99-121`), so
+purity tests may compare the classification fields plus the stable `ID` and need only
+exclude the timestamps.)
 
 ---
 
@@ -409,9 +413,8 @@ flowchart TD
       SM["Step Functions 'CryptaMapOrgScan' (Standard)<br/>org-fanout-stack.ts:474"]
       SEED["1. SeedTuples (Node Lambda)<br/>ListAccounts x enabled regions<br/>-> tuples.json / accounts.json in S3"]
       FAN["2. ScanFanout (Distributed Map, maxConcurrency 20)<br/>S3 ItemReader; tolerated failure 25%"]
-      SUM["3. MergeResults (Node Lambda)<br/>run summary -> scans/latest/&lt;runId&gt;.json"]
-      AMF["4. AccountMergeFanout (Distributed Map)<br/>one child per distinct account (tier-1 merge)"]
-      ORG["5. BuildOrgCbom (scanner Lambda, merge:true)<br/>streams per-account objects -> org CBOM+roadmap (tier-2)"]
+      AMF["3. AccountMergeFanout (Distributed Map)<br/>one child per distinct account (tier-1 merge)"]
+      ORG["4. BuildOrgCbom (scanner Lambda, merge:true)<br/>streams per-account objects -> org CBOM+roadmap (tier-2)"]
       SCN["Scanner Lambda (Go, CRYPTAMAP_MODE=lambda)<br/>scanner-stack.ts:39"]
       S3B["Results S3 bucket + DynamoDB scans table<br/>data-stack.ts"]
     end
@@ -422,7 +425,7 @@ flowchart TD
     end
 
     SS -.deploys.-> ROLE
-    SM --> SEED --> FAN --> SUM --> AMF --> ORG
+    SM --> SEED --> FAN --> AMF --> ORG
     FAN -->|InvokeScanner per (account,region)| SCN
     SCN -->|sts:AssumeRole + eager CallerIdentity verify| ROLE
     SCN -->|read-only List/Describe| MAPI
@@ -463,14 +466,17 @@ How it works, grounded in code:
    `cmd/cryptamap/lambda.go:100-118`), runs the engine, and writes the CBOM partial +
    **raw** `ScanResult` + a DynamoDB row using **base/central** creds so partials land
    centrally (`cmd/cryptamap/lambda.go:130,145-183`).
-4. **Hierarchical merge.** A lightweight summary Lambda rolls up counts; then a
-   second Distributed Map (`AccountMergeFanout`) invokes the scanner Lambda with
-   `mergeAccount:true` once per distinct account to produce per-account merged
-   objects (tier-1), and finally `BuildOrgCbom` (`merge:true`) streams those into the
-   org-wide CBOM + roadmap (tier-2), reconciling observed vs. `expectedShards`
-   (`org-fanout-stack.ts:388-467`; merge core in `cmd/cryptamap/lambda_merge.go` /
-   `lambda_merge_core.go`). The two-tier streaming design removes the
-   single-merge OOM cliff at hundreds of accounts ([SCALING.md](../SCALING.md) §4.1).
+4. **Hierarchical merge.** A second Distributed Map (`AccountMergeFanout`) invokes
+   the scanner Lambda with `mergeAccount:true` once per distinct account to produce
+   per-account merged objects (tier-1), and finally `BuildOrgCbom` (`merge:true`)
+   streams those into the org-wide CBOM + roadmap (tier-2), reconciling observed
+   vs. `expectedShards` (`org-fanout-stack.ts:388-467`; merge core in
+   `cmd/cryptamap/lambda_merge.go` / `lambda_merge_core.go`). The flow goes straight
+   from `ScanFanout` into the per-account merge — a prior Node summary Lambda was
+   removed as redundant (`org-fanout-stack.ts:304`); the Go merge emits the richer
+   completion-barrier summary under `scans/latest/<runId>.*`. The two-tier streaming
+   design removes the single-merge OOM cliff at hundreds of accounts
+   ([SCALING.md](../SCALING.md) §4.1).
 
 For the architecture-decision rationale (why StackSet roles + SFN Distributed Map +
 Audit hub) see the [CryptaMap architecture decision memory] and
@@ -572,7 +578,8 @@ updates:
    the same pure `BuildFindings` (`internal/scanner/findings.go:29-77`), guaranteeing
    identical **classification** (posture, severity, Mosca score, compliance mappings)
    regardless of how assets were sourced — *not* byte-identical records, since each
-   `Finding` carries a random `ID` and `time.Now()` timestamps (`findings.go:56,72-73`).
+   `Finding` carries per-run `time.Now()` timestamps (`findings.go:29,92-93`); the `ID`
+   itself is a deterministic content key (`stableFindingID`, `findings.go:76,99-121`).
 4. **One dedup key.** `models.BomRefForARN` (FNV-64a) is the single org-wide dedup
    identity for live and mock (`pkg/models/asset.go:14`).
 5. **Throttle ownership is the SDK's, not the engine's** — never add engine-level

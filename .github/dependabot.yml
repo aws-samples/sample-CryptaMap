@@ -1,0 +1,32 @@
+# Dependabot configuration for automated dependency-update PRs.
+#
+# Covers every dependency surface in the repo so an out-of-date or vulnerable
+# dependency is surfaced as a PR on a weekly cadence:
+#   - gomod           : the Go module rooted at the repo root (go.mod)
+#   - npm (/dashboard): the Cloudscape dashboard app
+#   - npm (/cdk)      : the AWS CDK app
+#   - github-actions  : the pinned action SHAs in .github/workflows
+#
+# github-actions updates keep the SHA-pinned first-party actions current while
+# preserving the pin (Dependabot bumps the SHA and the trailing version comment).
+version: 2
+updates:
+  - package-ecosystem: gomod
+    directory: /
+    schedule:
+      interval: weekly
+
+  - package-ecosystem: npm
+    directory: /dashboard
+    schedule:
+      interval: weekly
+
+  - package-ecosystem: npm
+    directory: /cdk
+    schedule:
+      interval: weekly
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly

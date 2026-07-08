@@ -67,6 +67,13 @@ func (s OpenSearchServerlessScanner) scan(ctx context.Context, client ossCollect
 			} else if c.Id != nil {
 				id = *c.Id
 			}
+			// A summary with no usable identifier (Name/Arn/Id all nil or empty)
+			// would emit a malformed empty-ResourceID asset whose synthetic ARN
+			// collides across collections (dedup then drops one). Skip it, matching
+			// the sibling scanners' nil-identifier guard.
+			if id == "" {
+				continue
+			}
 			kmsKey := "AWS_OWNED_KMS_KEY"
 			if c.KmsKeyArn != nil && *c.KmsKeyArn != "" {
 				kmsKey = *c.KmsKeyArn

@@ -80,7 +80,7 @@ type acmAPI interface {
 }
 
 // Scan lists all ACM certificates in the configured region and emits one CryptoAsset per certificate.
-// Pagination via NextToken; capped at 1000 items as a safety bound.
+// Pagination via NextToken; capped loudly at services.MaxAssetsPerScanner.
 func (s ACMScanner) Scan(ctx context.Context, cfg aws.Config) ([]models.CryptoAsset, error) {
 	client := acm.NewFromConfig(cfg)
 	accountID := services.AccountID(ctx, cfg)
@@ -106,14 +106,28 @@ func (s ACMScanner) scan(ctx context.Context, client acmAPI, accountID, region s
 				continue
 			}
 			d, derr := client.DescribeCertificate(ctx, &acm.DescribeCertificateInput{CertificateArn: c.CertificateArn})
-			if derr != nil {
-				fmt.Fprintf(os.Stderr, "acm DescribeCertificate %s: %v\n", *c.CertificateArn, derr)
+			if derr != nil || d.Certificate == nil {
+				// A per-cert DescribeCertificate failure must NOT silently drop
+				// the certificate from the CBOM (a denied/throttled Describe
+				// pass would otherwise look like a clean zero-ACM account).
+				// Emit it from the List summary with PostureUnknown — visible
+				// and honestly unclassified, never disguised (mirrors
+				// iot_certs.go's still-emit policy).
+				if derr != nil {
+					fmt.Fprintf(os.Stderr, "acm DescribeCertificate %s: %v\n", *c.CertificateArn, derr)
+				}
+				a := services.NewAsset("acm", models.CategoryCertificate, accountID, region, *c.CertificateArn, "AWS::CertificateManager::Certificate", services.CertProps("", "", "", time.Time{}, time.Time{}))
+				if c.DomainName != nil && *c.DomainName != "" {
+					a.Properties["domainName"] = *c.DomainName
+				}
+				services.PostureProperty(&a, models.PostureUnknown)
+				assets = append(assets, a)
+				if services.TruncationCapReached(len(assets), s.Name(), region) {
+					return assets, nil
+				}
 				continue
 			}
 			det := d.Certificate
-			if det == nil {
-				continue
-			}
 			sig := ""
 			if det.SignatureAlgorithm != nil {
 				sig = *det.SignatureAlgorithm

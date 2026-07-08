@@ -88,6 +88,15 @@ func (s EC2KeyPairsScanner) scan(ctx context.Context, client ec2KeyPairsAPI, acc
 		if keyType != "" {
 			a.Properties["keyType"] = keyType
 			services.StampObserved(&a, "high")
+			// The API reports only "rsa", not the modulus size: 2048 holds for
+			// EC2-GENERATED key pairs, but DescribeKeyPairs also returns IMPORTED
+			// key pairs which may be RSA-1024/3072/4096. Mark the size as an
+			// assumption so a weak imported 1024-bit key is never presented as a
+			// high-confidence observed RSA-2048. The observed fact is the RSA
+			// family (posture NonPQCClassical is unaffected either way).
+			if strings.EqualFold(keyType, "rsa") {
+				a.Properties["keySizeAssumed"] = "true"
+			}
 		} else {
 			a.Properties["note"] = "Key type not reported by the API; an EC2 key pair always has an underlying classical algorithm, so this is treated as classical-unknown, never quantum-resistant."
 		}
@@ -113,7 +122,9 @@ func (s EC2KeyPairsScanner) scan(ctx context.Context, client ec2KeyPairsAPI, acc
 func ec2KeyAlgo(keyType string) (name string, bits int, classical int) {
 	switch strings.ToLower(keyType) {
 	case "rsa":
-		// EC2 RSA key pairs are 2048-bit (SSH-2 RSA).
+		// EC2-GENERATED RSA key pairs are 2048-bit (SSH-2 RSA); imported key
+		// pairs may be 1024/3072/4096 and the API does not expose the modulus,
+		// so callers must mark the size as assumed (keySizeAssumed=true).
 		return "RSA-2048 (SSH)", 2048, 112
 	case "ed25519":
 		return "Ed25519 (SSH)", 256, 128

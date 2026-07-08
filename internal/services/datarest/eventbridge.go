@@ -124,8 +124,16 @@ func (s EventBridgeScanner) scan(ctx context.Context, client eventBridgeAPI, acc
 
 				desc, derr := client.DescribeEventBus(ctx, &eventbridge.DescribeEventBusInput{Name: &name})
 				if derr != nil {
+					// Do NOT drop the bus: posture does not depend on the Describe
+					// (EventBridge always encrypts at rest, doc-guaranteed), only the
+					// key tier does. Emit the asset with custody honestly undetermined
+					// instead of vanishing it from the CBOM (all-clear by omission).
 					fmt.Fprintf(os.Stderr, "eventbridge:%s DescribeEventBus: %v\n", name, derr)
-					return models.CryptoAsset{}, false
+					a := classifyEventBus(accountID, region, id, nil)
+					a.Properties["kmsKeyId"] = "UNRESOLVED"
+					a.Properties["keyTier"] = "unknown"
+					a.Properties["note"] = "DescribeEventBus failed; events are still encrypted at rest (EventBridge doc-fact), but the key tier (AWS-owned vs customer CMK) could not be read."
+					return a, true
 				}
 
 				// EventBridge always encrypts event data at rest with AES-256

@@ -1,5 +1,6 @@
 {
   "_comment": "MOCKUP/DESIGN data for the compliance redesign. Each claim is quoted from the cited public regulator document (see the source link on each claim) and independently re-verified 2026-06-12. This file demonstrates the 'claims live in a dated data layer, not hardcoded TSX' decision. In the real build this is generated/validated from the knowledge store; here it is hand-authored for review.",
+  "draft": true,
   "framework": "SEBI",
   "title": "SEBI CSCRF — Cybersecurity & Cyber Resilience Framework",
   "asOf": "2026-06-12",

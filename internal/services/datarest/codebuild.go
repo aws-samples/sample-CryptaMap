@@ -116,6 +116,23 @@ func classifyCodeBuildProject(accountID, region, name string, arn, encryptionKey
 	return a
 }
 
+// unresolvedCodeBuildProject builds the honest placeholder for a project whose
+// name is KNOWN from ListProjects but whose detail could not be resolved (a
+// BatchGetProjects error, or a name in ProjectsNotFound). CodeBuild always
+// encrypts build artifacts at rest (doc-fact), so posture stays SymmetricOnly —
+// but the key tier was never observed, so it is recorded as honestly undetermined
+// (kmsKeyId=UNRESOLVED, keyTier=unknown) instead of being silently dropped
+// (all-clear by omission) or stamped with a fabricated default-key custody claim.
+func unresolvedCodeBuildProject(accountID, region, name, note string) models.CryptoAsset {
+	a := services.NewAsset("codebuild", models.CategoryDataAtRest, accountID, region, name, "AWS::CodeBuild::Project", services.AESAtRest())
+	services.PostureProperty(&a, models.PostureSymmetricOnly)
+	services.StampDocFact(&a, "high", "https://docs.aws.amazon.com/AWSCloudFormation/latest/TemplateReference/aws-resource-codebuild-project.html", "2026-06-15")
+	a.Properties["kmsKeyId"] = "UNRESOLVED"
+	a.Properties["keyTier"] = "unknown"
+	a.Properties["note"] = note
+	return a
+}
+
 // Scan lists project names (NextToken paging), then resolves them in batches of
 // up to 100 via BatchGetProjects to read each project's EncryptionKey. CodeBuild
 // always encrypts build artifacts at rest with a symmetric AES-256 KMS key, so
@@ -160,8 +177,22 @@ func (s CodeBuildScanner) scan(ctx context.Context, client codebuildAPI, account
 			}
 			batch, berr := client.BatchGetProjects(ctx, &codebuild.BatchGetProjectsInput{Names: names[start:end]})
 			if berr != nil {
+				// HONESTY CONTRACT: the project names are already KNOWN from
+				// ListProjects. Dropping them on a batch error would be an
+				// all-clear by omission, so each name is emitted with an
+				// undetermined key tier instead of vanishing from the CBOM.
 				fmt.Fprintf(os.Stderr, "codebuild BatchGetProjects: %v\n", berr)
+				for _, n := range names[start:end] {
+					assets = append(assets, unresolvedCodeBuildProject(accountID, region, n,
+						"BatchGetProjects failed for this project's batch; artifacts are still always encrypted at rest (CodeBuild doc-fact), but the KMS key tier could not be read."))
+				}
 				continue
+			}
+			// Names ListProjects returned but BatchGetProjects could not resolve
+			// must not vanish silently either — emit them with an undetermined tier.
+			for _, nf := range batch.ProjectsNotFound {
+				assets = append(assets, unresolvedCodeBuildProject(accountID, region, nf,
+					"Project was listed but not returned by BatchGetProjects (ProjectsNotFound); the KMS key tier could not be read."))
 			}
 			for _, p := range batch.Projects {
 				name := ""

@@ -164,3 +164,35 @@ func TestEC2KeyPairsScanClassifiesAndIsHonest(t *testing.T) {
 		t.Errorf("key-unknown: expected an explanatory classical-unknown note, got none")
 	}
 }
+
+// TestEC2KeyPairsRSASizeIsMarkedAssumed guards the imported-key honesty fix:
+// DescribeKeyPairs reports only KeyType "rsa" (never the modulus size), and
+// IMPORTED key pairs may be RSA-1024/3072/4096, so the 2048-bit figure is an
+// assumption about EC2-generated keys — the asset must carry
+// keySizeAssumed=true so a weak imported 1024-bit key is never presented as a
+// definite, high-confidence RSA-2048 observation. Ed25519 (fixed size by
+// definition) must NOT carry the marker.
+func TestEC2KeyPairsRSASizeIsMarkedAssumed(t *testing.T) {
+	client := &fakeEC2KeyPairsClient{
+		out: &ec2.DescribeKeyPairsOutput{
+			KeyPairs: []ec2types.KeyPairInfo{
+				{KeyPairId: ec2keypairsStrptr("key-rsa"), KeyType: ec2types.KeyTypeRsa},
+				{KeyPairId: ec2keypairsStrptr("key-ed"), KeyType: ec2types.KeyTypeEd25519},
+			},
+		},
+	}
+	assets, err := EC2KeyPairsScanner{}.scan(context.Background(), client, "111122223333", "us-east-1")
+	if err != nil {
+		t.Fatalf("scan returned unexpected error: %v", err)
+	}
+	byID := map[string]models.CryptoAsset{}
+	for _, a := range assets {
+		byID[a.ResourceID] = a
+	}
+	if got := byID["key-rsa"].Properties["keySizeAssumed"]; got != "true" {
+		t.Errorf("RSA key pair: expected keySizeAssumed=true (API does not expose the modulus; imported keys may be 1024/3072/4096), got %q", got)
+	}
+	if got, ok := byID["key-ed"].Properties["keySizeAssumed"]; ok {
+		t.Errorf("Ed25519 key pair: keySizeAssumed must be absent (size fixed by definition), got %q", got)
+	}
+}

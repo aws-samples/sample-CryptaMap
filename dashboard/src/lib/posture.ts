@@ -59,9 +59,13 @@ export interface PostureView {
 // symmetric-only / pqc-hybrid / pqc-ready (INFORMATIONAL) > unknown.
 const POSTURE: Record<CryptoPosture, PostureView> = {
   'no-encryption': { label: 'No encryption', indicator: 'error', severity: 'CRITICAL' },
-  'legacy-tls': { label: 'Quantum-vulnerable (traditional public-key)', indicator: 'error', severity: 'HIGH' },
+  // legacy-tls (TLS 1.0/1.1, finding.go) gets its OWN label so a deprecated-protocol
+  // violation is distinguishable in text (not colour alone) from merely pre-PQC crypto.
+  'legacy-tls': { label: 'Legacy TLS (1.0/1.1) — quantum-vulnerable', indicator: 'error', severity: 'HIGH' },
   'non-pqc-classical': { label: 'Quantum-vulnerable (traditional public-key)', indicator: 'warning', severity: 'MEDIUM' },
-  'symmetric-only': { label: 'Quantum-resistant at rest (symmetric AES-256)', indicator: 'success', severity: 'INFORMATIONAL' },
+  // Key-size-neutral: the posture enum does not carry the key size (AES-128/192
+  // also map here); the symmetricStrength tier carries the 256-vs-128/192 nuance.
+  'symmetric-only': { label: 'Quantum-resistant at rest (symmetric encryption)', indicator: 'success', severity: 'INFORMATIONAL' },
   'pqc-hybrid': { label: 'Hybrid PQ key exchange, traditional certificate', indicator: 'success', severity: 'INFORMATIONAL' },
   'pqc-ready': { label: 'Migrated to post-quantum cryptography', indicator: 'success', severity: 'INFORMATIONAL' },
   unknown: { label: 'Unknown / needs investigation', indicator: 'pending', severity: 'INFORMATIONAL' },
@@ -179,7 +183,11 @@ export function pqcStatusPresentationForAsset(
   if (posture === 'no-encryption') {
     return PQC_STATUS['not-encrypted'];
   }
-  if (isQuantumResistantPosture(posture) && (status === 'not-yet' || !status || status === 'not-applicable')) {
+  // Mirror the backend fully: EffectivePQCStatus (internal/pqc/lookup.go) promotes
+  // EVERY status — including a stale 'available'/'hybrid-tls-only' — to
+  // not-applicable for quantum-resistant postures, so a pre-promotion roadmap.json
+  // cannot re-introduce an actionable "PQC available" badge on a symmetric-only key.
+  if (isQuantumResistantPosture(posture)) {
     return { label: 'Quantum-resistant — no action', indicator: 'success' };
   }
   return pqcStatusPresentation(status);
@@ -204,7 +212,7 @@ export interface StrengthView {
 
 const SYMMETRIC_STRENGTH: Record<SymmetricStrength, StrengthView> = {
   // AES-256 (or stronger): Grover only halves to ~128-bit effective — safe.
-  'quantum-safe': { label: 'AES-256 — quantum-resistant', indicator: 'success' },
+  'quantum-safe': { label: 'Symmetric — quantum-resistant', indicator: 'success' },
   // AES-128/192: adequate today, smaller Grover margin — review / consider AES-256.
   'adequate-review': { label: 'AES-128/192 — adequate, review', indicator: 'info' },
   // DES/3DES/RC4: classically weak or broken irrespective of quantum — replace now.
@@ -395,7 +403,10 @@ export function tierReason(item: Pick<RoadmapItem, 'pqcStatus' | 'upgradeEase'>)
   const tier = roadmapTier(item);
   switch (tier) {
     case 'no-action':
-      return 'AES-256 at rest is already quantum-resistant — no migration needed.';
+      // Key-size-neutral: not-applicable also covers pqc-hybrid/pqc-ready assets and
+      // AES-128/192 (whose nuance the symmetricStrength tier carries) — do not
+      // assert a specific cipher strength the scanner did not prove for this asset.
+      return 'Already quantum-resistant — no asymmetric material to migrate.';
     case 'act-now':
       return 'PQC is available today and the upgrade is a one-flip or config change — start here.';
     case 'plan-watch':

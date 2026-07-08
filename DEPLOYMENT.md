@@ -18,30 +18,46 @@ For the make targets see the [Make targets](./README.md#make-targets) section, a
 
 ## The deploy command (correct form)
 
-`make deploy` runs `npx cdk deploy --all --require-approval never` with the
+`make deploy` runs `npx cdk deploy --all` (add `CI=1` to skip the approval prompt) with the
 `cdk.json` defaults — and the default is `orgScanningEnabled: false`. That deploys
 **only** the single-account scheduled-scan stacks; the `CryptaMap-OrgFanout` stack
 is not synthesized. To stand up the org fan-out you must invoke the CDK directly and
 turn org scanning on:
 
 ```bash
-cd cdk && npx cdk deploy CryptaMap-OrgFanout --exclusively \
+cd cdk && npx cdk deploy --all \
   -c orgScanningEnabled=true \
   -c organizationId=<ORG_ID> \
   -c orgRootId=<ROOT_ID> \
-  -c scannerExternalId=<EXTERNAL_ID>
+  -c scannerExternalId=<EXTERNAL_ID> \
+  -c alertEmail=<OPS_EMAIL>
 ```
+
+> **Why `--all` and not `CryptaMap-OrgFanout --exclusively`?** Turning
+> `orgScanningEnabled=true` changes the **shape of the other stacks too**:
+> `CryptaMap-Security` gains the orchestrator role, the local scanner-role trust
+> swap, and the member-role StackSet, and `CryptaMap-Scanner` re-homes the scanner
+> Lambda onto the orchestrator role. Deploying only the OrgFanout stack with
+> `--exclusively` would leave those stacks in their single-account shape (or fail
+> on unresolved cross-stack references) — the fan-out would assume roles that were
+> never created/trusted. Always deploy all stacks together when flipping org mode.
 
 When `orgScanningEnabled=true`, synth **refuses** to proceed with the placeholder
 org id (`o-exampleorgid`), the placeholder root id (`r-exam`), or the default
-ExternalId (`cryptamap-scanner`), and prints exactly what to pass. **These refusals
-only fire when `orgScanningEnabled=true`** — under the default single-account path
-nothing is refused because no org scanning happens.
+ExternalId (`cryptamap-scanner`), and prints exactly what to pass. It **also refuses**
+to proceed with no notification target: `alertEmail` defaults to empty (`cdk.json`),
+which leaves the alarms/cost-budget SNS topic subscriber-less, so you must pass
+`-c alertEmail=<ops-email>` — otherwise a broken or runaway org-wide scan would
+notify nobody. For a demo/eval synth where you deliberately want no subscriber, add
+`-c allowSilentAlerts=true` to bypass the alert guard. **These refusals only fire when
+`orgScanningEnabled=true`** — under the default single-account path nothing is refused
+because no org scanning happens.
 
 Optional context flags: `-c fanoutRegions=us-east-1,ap-south-1` (default; use
 `-c fanoutRegions=all` for every enabled region), `-c stackSetCallAs=SELF` (deploy
 from the management account instead of a delegated-admin Audit account — see
-[topology](#where-to-deploy-account-topology)), `-c retentionScans=<n>` (default 30).
+[topology](#where-to-deploy-account-topology)), `-c retentionScans=<n>` (default 30),
+`-c allowSilentAlerts=true` (demo/eval escape hatch for the org alert-email guard).
 
 ## Cross-account role prerequisite
 
@@ -96,9 +112,16 @@ aws cloudformation deploy \
   --capabilities CAPABILITY_NAMED_IAM \
   --parameter-overrides \
       OrchestratorRoleArn="arn:aws:iam::<ORCHESTRATOR_ACCT>:role/CryptaMapOrchestratorRole" \
-      OrganizationId="o-yourorgid" \
-      ExternalId="cryptamap-scanner"
+      OrganizationId="<ORG_ID>" \
+      ExternalId="<EXTERNAL_ID>"
 ```
+
+Substitute your own values (see [Replace these values](#replace-these-values)). The
+`ExternalId` you set here **must match** the `-c scannerExternalId=<EXTERNAL_ID>` you
+pass to the org deploy — the orchestrator presents exactly that value on
+`sts:AssumeRole`, so a mismatch makes the account UNCOVERED. Do **not** use the demo
+default `cryptamap-scanner`: the org-deploy guard (`cdk/bin/app.ts`) refuses it, and
+it is a public value that defeats the confused-deputy guard.
 
 This creates exactly the read-only, org-+ExternalId-gated role described above, in
 that one account. Repeat per account, or use the StackSet to do it org-wide at once.
@@ -164,7 +187,7 @@ fails on drift. Do not hand-maintain a copy — paste the array from that file i
 ```
 
 > The member scanner role gets **reads only**. It never receives any write — the
-> three resource-scoped writes below live exclusively on the orchestrator role.
+> two resource-scoped writes below live exclusively on the orchestrator role.
 
 ### 3) Orchestrator-role permissions (Audit account only)
 
@@ -175,9 +198,13 @@ It has:
 - the **same** custom least-privilege READ list as the member role (it scans the
   Audit/management account's own resources too), plus
 - `sts:AssumeRole` scoped to `arn:aws:iam::*:role/CryptaMapScannerRole` (assume the
-  member roles), plus
+  member roles) **and org-confined via `aws:ResourceOrgID`** — the account segment
+  is a wildcard so the StackSet-created role in every member resolves, and the
+  condition is what stops the orchestrator from assuming a same-named role in an
+  attacker-controlled account outside your org (see `cdk/lib/security-stack.ts`),
+  plus
 - `organizations:ListAccounts` (enumerate the org), plus
-- **exactly three** resource-scoped WRITES (the `orchestratorWrites` block in
+- **exactly two** resource-scoped WRITES (the `orchestratorWrites` block in
   [`cdk/policy/scanner-actions.json`](./cdk/policy/scanner-actions.json)) — and
   nothing else writes anywhere:
 
@@ -189,7 +216,10 @@ It has:
       "Sid": "AssumeMemberScannerRole",
       "Effect": "Allow",
       "Action": "sts:AssumeRole",
-      "Resource": "arn:aws:iam::*:role/CryptaMapScannerRole"
+      "Resource": "arn:aws:iam::*:role/CryptaMapScannerRole",
+      "Condition": {
+        "StringEquals": { "aws:ResourceOrgID": "<ORG_ID>" }
+      }
     },
     {
       "Sid": "ListOrgAccounts",
@@ -208,16 +238,16 @@ It has:
       "Effect": "Allow",
       "Action": "dynamodb:PutItem",
       "Resource": "arn:aws:dynamodb:<REGION>:<ORCHESTRATOR_ACCOUNT_ID>:table/<SCANS_TABLE>"
-    },
-    {
-      "Sid": "ImportFindingsToSecurityHub",
-      "Effect": "Allow",
-      "Action": "securityhub:BatchImportFindings",
-      "Resource": "arn:aws:securityhub:<REGION>:<ORCHESTRATOR_ACCOUNT_ID>:product/<ORCHESTRATOR_ACCOUNT_ID>/default"
     }
   ]
 }
 ```
+
+> No Security Hub write: CryptaMap never calls `securityhub:BatchImportFindings`
+> (ASFF output is a local file you import yourself), so the orchestrator role
+> carries no such grant — see
+> [docs/SECURITY-HUB-IMPORT.md](./docs/SECURITY-HUB-IMPORT.md) for the permission
+> the *importing* principal needs.
 
 The READ statement (`CryptaMapScannerReads`, same as block 2) is attached to the
 orchestrator role as well; it is omitted here only to avoid repeating the long action
@@ -231,10 +261,12 @@ list.
 | `<ORG_ID>` | Your AWS Organizations id (gates the trust via `aws:PrincipalOrgID`) | `-c organizationId=` | `o-ab12cd34ef` |
 | `<ROOT_ID>` | Your organization **root** id — required by the org-deploy guard alongside `<ORG_ID>` | `-c orgRootId=` | `r-ab12` |
 | `<EXTERNAL_ID>` | A private shared secret the orchestrator passes on assume-role | `-c scannerExternalId=` | `acme-cryptamap-7f3a9` |
+| `<OPS_EMAIL>` | Ops address subscribed to the alarms/cost-budget SNS topic — required for org deploys unless `-c allowSilentAlerts=true` | `-c alertEmail=` | `crypto-ops@acme.example` |
 
-> **Why four, not three?** The IAM JSON blocks above substitute three values
-> (`<ORCHESTRATOR_ACCOUNT_ID>`, `<ORG_ID>`, `<EXTERNAL_ID>`). The **org deploy
-> command** needs a fourth, `<ROOT_ID>` (`-c orgRootId=`): when
+> **Why does the deploy command need `<ROOT_ID>`?** The IAM JSON blocks above
+> substitute three values (`<ORCHESTRATOR_ACCOUNT_ID>`, `<ORG_ID>`,
+> `<EXTERNAL_ID>`). The **org deploy command** needs a fourth, `<ROOT_ID>`
+> (`-c orgRootId=`): when
 > `orgScanningEnabled=true`, synth refuses to deploy if **either** `organizationId`
 > is still `o-exampleorgid` **or** `orgRootId` is still `r-exam`. The repo defaults
 > (`o-exampleorgid`, `r-exam`, ExternalId `cryptamap-scanner`) are **demo
@@ -328,7 +360,7 @@ management account with `-c stackSetCallAs=SELF`.)
 **2) Destroy the in-account stacks.**
 
 ```bash
-make destroy        # cdk destroy --all --force  (DESTRUCTIVE)
+make destroy        # cdk destroy --all  (DESTRUCTIVE; interactive confirmation, CI=1 adds --force)
 ```
 
 This removes the orchestration stacks and the Audit-account roles
@@ -337,14 +369,17 @@ Lambda, the scheduled-scan rule, the seed/merge Lambda log groups, and the
 `CryptaMap-Security` stack (which removes the now-empty StackSet from step 1).
 
 **3) Manually clean the RETAINed evidence store.** `cdk destroy` intentionally
-leaves these behind (`cdk/lib/data-stack.ts`, `cdk/lib/org-fanout-stack.ts`); delete
-them by hand only when you are decommissioning and want the evidence gone:
+leaves these behind (`cdk/lib/data-stack.ts`, `cdk/lib/org-fanout-stack.ts`,
+`cdk/lib/alerting-stack.ts`); delete them by hand only when you are decommissioning
+and want the evidence gone:
 
 - the **results S3 bucket** — it is **versioned**, so every object *version* (and any
   delete markers) must be purged before the bucket can be deleted;
 - the **results access-logs S3 bucket**;
 - the **DynamoDB scans table**;
-- the **KMS CMK** (schedule key deletion; it cannot be deleted instantly);
+- the **evidence-store KMS CMK** (schedule key deletion; it cannot be deleted instantly);
+- the **alert-topic KMS CMK** (`AlertTopicKey`, the `CryptaMap-Alerting` SNS topic's
+  encryption key — RETAINed too; schedule its deletion the same way);
 - the **state-machine CloudWatch log group**.
 
 There is no Make target for this step — it is manual on purpose, so that tearing down

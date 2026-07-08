@@ -55,7 +55,7 @@ export default function ReportsView() {
             </Box>
             <Box variant="small" color="text-body-secondary">
               Don&apos;t see your files? Run a scan, then serve the output directory:{' '}
-              <code>cryptamap serve ./out</code>.
+              <code>cryptamap serve --dir ./out</code>.
             </Box>
           </SpaceBetween>
         </Container>
@@ -132,7 +132,7 @@ export default function ReportsView() {
                         ? 'The artifact manifest could not be read. '
                         : ''}
                       Run a scan, then serve the output directory:{' '}
-                      <code>cryptamap serve ./out</code>. In a deployed (hosted) setup
+                      <code>cryptamap serve --dir ./out</code>. In a deployed (hosted) setup
                       your artifacts live in the scan-output S3 bucket instead.
                     </Box>
                   </SpaceBetween>

@@ -72,7 +72,7 @@ dist/scan-output/
 
 # Real-account org data for LOCAL viewing only (never commit — contains real
 # account IDs). DEPRECATED workflow: the .local.json in-place-swap is removed —
-# view real data with `cryptamap serve ./out` instead. The ignore stays repo-wide
+# view real data with `cryptamap serve --dir ./out` instead. The ignore stays repo-wide
 # as a belt-and-suspenders so a stray real scan named *.local.json can never be
 # committed from anywhere in the tree.
 *.local.json

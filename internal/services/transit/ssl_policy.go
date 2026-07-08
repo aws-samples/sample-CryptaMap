@@ -161,17 +161,26 @@ func classifySSLPolicy(sp elbv2types.SslPolicy, policyName string) sslPolicyResu
 		PQCHybrid:     pqHybrid,
 		Source:        services.SourceObserved,
 	}
-	// Downgrade-fallback warning: a PQ-hybrid policy that ALSO permits a legacy
-	// TLS floor (1.0/1.1) — e.g. ELBSecurityPolicy-TLS13-1-0-PQ-2025-09 — is NOT a
-	// clean all-clear. A downgrade-capable client can still negotiate TLS 1.0, so
-	// the PQ KEX never engages. Keep the PQCHybrid credit (the capability is real)
-	// but surface the legacy floor (carried on the result, stamped by the caller)
-	// so it is not silently scored compliant/Informational.
+	// Downgrade-fallback warning: ANY policy that permits a legacy TLS floor
+	// (1.0/1.1) alongside a higher ceiling is NOT a clean all-clear — a
+	// downgrade-capable client can still negotiate TLS 1.0/1.1. This applies
+	// equally to classical policies (e.g. ELBSecurityPolicy-2016-08) and to
+	// PQ-hybrid ones (e.g. ELBSecurityPolicy-TLS13-1-0-PQ-2025-09, where the
+	// downgrade additionally bypasses the PQ key exchange). Keep the posture
+	// credit for the real capability (ceiling / PQ KEX) but surface the legacy
+	// floor (carried on the result, stamped by the caller) so it is not silently
+	// scored compliant/Informational. Previously this fired only for pqHybrid,
+	// leaving a classical policy with the same 1.0/1.1 floor silently clean.
 	warning := ""
-	if pqHybrid && (floor == "1.0" || floor == "1.1") {
-		warning = "pq-hybrid policy permits a legacy TLS " + floor +
-			" floor; a downgrade-capable client can negotiate TLS " + floor +
-			" and bypass the post-quantum key exchange"
+	if floor == "1.0" || floor == "1.1" {
+		warning = "policy permits a legacy TLS " + floor +
+			" floor; a downgrade-capable client can negotiate TLS " + floor
+		if ver != floor {
+			warning += " despite the TLS " + ver + " ceiling"
+		}
+		if pqHybrid {
+			warning += " and bypass the post-quantum key exchange"
+		}
 	}
 	// The policy name labels the suite (Name only); the real ciphers populate a
 	// second suite. policyName is NOT an algorithm, so it is not copied into

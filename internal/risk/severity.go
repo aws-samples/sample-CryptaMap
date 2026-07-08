@@ -63,6 +63,25 @@ func IsQuantumResistantPosture(p models.CryptoPosture) bool {
 	}
 }
 
+// IsMoscaEscalatable reports whether a posture is one whose Shor-vulnerable
+// classical cryptography the scanner actually OBSERVED, and therefore may have
+// its finding severity raised by the (posture-blind, per-service) Mosca/HNDL
+// urgency score. This is an ALLOWLIST of the three proven-vulnerable postures on
+// purpose: any other value — the quantum-resistant postures, PostureUnknown, an
+// empty string, or a non-canonical/crafted posture from an ingested CBOM — must
+// NOT be escalated by the hardcoded Mosca constant, because the scanner has not
+// proven a vulnerable asset exists (escalating it would fabricate an urgency
+// verdict the data cannot support — the inverse of the fabricated-all-clear
+// class). Such postures keep their SeverityFromPosture floor.
+func IsMoscaEscalatable(p models.CryptoPosture) bool {
+	switch p {
+	case models.PostureNoEncryption, models.PostureLegacyTLS, models.PostureNonPQCClassical:
+		return true
+	default:
+		return false
+	}
+}
+
 // HighestSeverity returns the worst of two severities.
 func HighestSeverity(a, b models.Severity) models.Severity {
 	if models.NormalizedSeverity(a) >= models.NormalizedSeverity(b) {

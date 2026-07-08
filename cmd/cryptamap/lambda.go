@@ -75,6 +75,9 @@ func runLambda() {
 }
 
 func handle(ctx context.Context, evt LambdaEvent) (LambdaResponse, error) {
+	if err := validateLambdaEvent(evt); err != nil {
+		return LambdaResponse{}, err
+	}
 	cfg := cmconfig.Default()
 
 	// baseCfg holds the orchestrator's OWN credentials. It is used to write the
@@ -109,7 +112,7 @@ func handle(ctx context.Context, evt LambdaEvent) (LambdaResponse, error) {
 		return runMergeAccountMode(ctx, baseCfg, evt.RunID, evt.AccountID)
 	}
 	if evt.Merge {
-		return runMergeMode(ctx, baseCfg, evt.RunID, evt.ExpectedShards)
+		return runMergeMode(ctx, baseCfg, evt.RunID, evt.ExpectedShards, evt.RegionDiscoveryFailedAccounts)
 	}
 
 	// scanCfg is the config the engine scans with — it carries the TARGET region
@@ -118,6 +121,11 @@ func handle(ctx context.Context, evt LambdaEvent) (LambdaResponse, error) {
 	// the central bucket's region.
 	scanCfg := baseCfg.Copy()
 	scanCfg.Region = region
+	// acctID is the account identity stamped onto the ScanResult (and from there
+	// the CBOM, the S3 partial key, and the Dynamo PK). It starts as the event-
+	// supplied value and, for a payload-less/scheduled invoke, is resolved from
+	// STS below so provenance is NEVER an empty string.
+	acctID := evt.AccountID
 	if evt.RoleArn != "" {
 		scanCfg = org.AssumeRole(ctx, baseCfg, evt.RoleArn, evt.ExternalId, evt.RoleSessionName)
 		// AssumeRole only does base.Copy(), so the target region MUST be re-set.
@@ -136,6 +144,39 @@ func handle(ctx context.Context, evt LambdaEvent) (LambdaResponse, error) {
 		if evt.AccountID != "" && assumedAcct != "" && assumedAcct != evt.AccountID {
 			return LambdaResponse{}, fmt.Errorf("assumed-role account mismatch: landed in %s, expected %s (role %s)", assumedAcct, evt.AccountID, evt.RoleArn)
 		}
+		// Backfill provenance for a direct roleArn invoke that omitted accountId:
+		// mirror the no-role branch below so a role-assuming payload-less invoke
+		// stamps the ASSUMED account (from the verified assumed-role identity)
+		// onto the ScanResult/CBOM/raw-shard key/Dynamo PK instead of an empty
+		// string. assumedAcct is the account of the credentials we actually
+		// scan with, so it is the correct provenance.
+		if evt.AccountID == "" {
+			acctID = assumedAcct
+		}
+	} else {
+		// No role assumed: resolve the caller identity UNCONDITIONALLY.
+		//
+		// (a) Event supplies an accountId: it would otherwise be stamped verbatim
+		//     onto the ScanResult, the S3 partial key, the Dynamo PK and the CBOM
+		//     with ZERO verification against the credentials actually used — a
+		//     typo'd or malicious event could attribute this account's crypto
+		//     inventory to an arbitrary account ID. Mirror the assumed-role guard
+		//     above: fail loudly on mismatch.
+		// (b) Event supplies NO accountId (the scheduled EventBridge invoke and any
+		//     direct payload-less invoke): the scan would otherwise stamp an EMPTY
+		//     account onto the CBOM provenance, the raw-shard key and the Dynamo PK.
+		//     Resolve the real account from STS and use it, so scheduled scans carry
+		//     genuine provenance instead of "".
+		callerAcct, _, cerr := org.CallerIdentity(ctx, scanCfg)
+		if cerr != nil {
+			return LambdaResponse{}, fmt.Errorf("caller-identity resolution failed (event account %q): %w", evt.AccountID, cerr)
+		}
+		if evt.AccountID != "" && callerAcct != "" && callerAcct != evt.AccountID {
+			return LambdaResponse{}, fmt.Errorf("event account mismatch: credentials belong to %s, event claimed %s (no roleArn supplied)", callerAcct, evt.AccountID)
+		}
+		if evt.AccountID == "" {
+			acctID = callerAcct
+		}
 	}
 
 	complianceReg := compliance.NewRegistry(cfg.Compliance.Frameworks)
@@ -144,11 +185,20 @@ func handle(ctx context.Context, evt LambdaEvent) (LambdaResponse, error) {
 	eng := scanner.NewEngine(reg, complianceReg, scanner.EngineOptions{
 		MaxGoroutines: cfg.Scan.Concurrency.MaxGoroutines,
 		ToolVersion:   toolVersion,
+		// NOTE: the Lambda path uses cmconfig.Default() (no YAML file is read in
+		// Lambda), so risk.mosca.overrides is always empty here today and this
+		// resolves to nil (built-in per-service defaults). It is wired anyway so
+		// that if/when the Lambda gains YAML/env config loading, operator Mosca
+		// overrides flow through exactly like the CLI path instead of being
+		// silently dropped. Custom Mosca overrides currently require the CLI
+		// (`cryptamap --config <file>`).
+		MoscaOverrides: cfg.MoscaOverrideParams(),
 	})
 
-	// Scan the member account/region. res.AccountID == evt.AccountID and
-	// res.Region == scanCfg.Region, so the partial carries correct identity.
-	res := eng.Run(ctx, scanCfg, evt.AccountID)
+	// Scan the member account/region. res.AccountID == acctID (event-supplied and
+	// verified, or STS-resolved for payload-less invokes) and res.Region ==
+	// scanCfg.Region, so the partial carries correct identity.
+	res := eng.Run(ctx, scanCfg, acctID)
 
 	resp := LambdaResponse{
 		ScanID:    res.ScanID,
@@ -164,12 +214,18 @@ func handle(ctx context.Context, evt LambdaEvent) (LambdaResponse, error) {
 	// artifacts land in the central account. The S3 Key and Dynamo PK already
 	// encode ACCOUNT#/REGION#, so each (account,region) partial is unique.
 	bucket := os.Getenv("RESULTS_BUCKET")
+	// cbomErr/rawErr track the durable-artifact writes so the single-account path
+	// can fail LOUDLY (below) when nothing at all was persisted — a scheduled scan
+	// must never return success with zero durable output (the alerting stack's
+	// metricErrors alarm keys off a thrown error; see cdk/lib/alerting-stack.ts).
+	var cbomErr, rawErr error
 	if bucket != "" {
 		w := output.NewS3Writer(baseCfg, bucket, "scans/")
 		key, err := w.PutCBOM(ctx, res)
 		if err == nil {
 			resp.S3Key = key
 		} else {
+			cbomErr = err
 			fmt.Fprintf(os.Stderr, "PutCBOM: %v\n", err)
 		}
 
@@ -183,10 +239,22 @@ func handle(ctx context.Context, evt LambdaEvent) (LambdaResponse, error) {
 			relKey := strings.TrimPrefix(rawScanKey(evt.RunID, res.AccountID, res.Region, res.ScanID), "scans/")
 			if rawKey, rerr := w.PutBytes(ctx, relKey, rawBody, "application/json"); rerr == nil {
 				resp.RawKey = rawKey
+			} else if evt.RunID != "" {
+				// Org fan-out: the raw shard IS the merge input. Returning success
+				// here would record the shard SUCCEEDED in the Distributed Map with
+				// no raw object for the merge — the (account,region) silently absent
+				// from the org CBOM with no retry. Fail the shard so Step Functions'
+				// retry/failed path sees it (same rationale as the eager assume-role
+				// verification above).
+				return LambdaResponse{}, fmt.Errorf("PutBytes(raw) for %s/%s: %w", res.AccountID, res.Region, rerr)
 			} else {
+				rawErr = rerr
 				fmt.Fprintf(os.Stderr, "PutBytes(raw): %v\n", rerr)
 			}
+		} else if evt.RunID != "" {
+			return LambdaResponse{}, fmt.Errorf("marshal raw ScanResult for %s/%s: %w", res.AccountID, res.Region, merr)
 		} else {
+			rawErr = merr
 			fmt.Fprintf(os.Stderr, "marshal raw ScanResult: %v\n", merr)
 		}
 	}
@@ -201,6 +269,20 @@ func handle(ctx context.Context, evt LambdaEvent) (LambdaResponse, error) {
 		if derr := dw.PutScan(ctx, res, resp.S3Key); derr != nil {
 			fmt.Fprintf(os.Stderr, "PutScan: %v\n", derr)
 		}
+	}
+
+	// Durable-artifact barrier (single-account / scheduled path): if a results
+	// bucket is configured but NEITHER the CBOM NOR the raw ScanResult landed,
+	// the scan produced no durable output at all — returning success here would
+	// make the failure invisible (the alerting stack's metricErrors alarm only
+	// fires on a thrown error, and nothing downstream would ever notice). Fail
+	// the invocation instead. The org path (RunID != "") already fails inline on
+	// a raw-shard write error above; Dynamo metadata remains deliberately
+	// tolerated (the S3 artifacts are the source of truth).
+	if bucket != "" && resp.S3Key == "" && resp.RawKey == "" {
+		return LambdaResponse{}, fmt.Errorf(
+			"no durable artifact written for %s/%s: PutCBOM: %v; raw ScanResult: %v",
+			res.AccountID, res.Region, cbomErr, rawErr)
 	}
 
 	return resp, nil

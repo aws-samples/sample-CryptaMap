@@ -24,10 +24,12 @@ func (m *RBIMapper) Map(asset models.CryptoAsset, posture models.CryptoPosture) 
 		// RBI has no PQC mandate, so report quantum-READINESS (not regulatory
 		// compliance). A quantum-vulnerable in-transit posture is surfaced as
 		// quantum-vulnerable, not "non-compliant" (there is no obligation to breach).
+		// Use the shared readiness vocabulary verbatim so RBI reports the same
+		// readiness as SEBI/IRDAI for the identical posture (legacy-tls is already
+		// "quantum-vulnerable" there; non-pqc-classical is "partial"). A previous
+		// RBI-only override to "quantum-vulnerable" silently flipped the whole
+		// Security Hub finding from WARNING to FAILED for classical TLS assets.
 		status := readinessFromPosture(posture)
-		if posture == models.PostureNonPQCClassical || posture == models.PostureLegacyTLS {
-			status = "quantum-vulnerable"
-		}
 		out = append(out, models.ComplianceMapping{
 			Framework:   RBI,
 			ControlID:   "CryptaMap→PQC-Readiness",

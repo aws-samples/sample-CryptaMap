@@ -176,6 +176,10 @@ func (f *fuzzLambdaClient) ListFunctions(ctx context.Context, in *lambda.ListFun
 	return &lambda.ListFunctionsOutput{}, nil
 }
 
+func (f *fuzzLambdaClient) ListFunctionUrlConfigs(ctx context.Context, in *lambda.ListFunctionUrlConfigsInput, _ ...func(*lambda.Options)) (*lambda.ListFunctionUrlConfigsOutput, error) {
+	return &lambda.ListFunctionUrlConfigsOutput{}, nil
+}
+
 // directconnect: DescribeConnections.
 type fuzzDirectConnectClient struct{ errTop bool }
 

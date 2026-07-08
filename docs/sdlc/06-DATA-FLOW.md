@@ -210,23 +210,29 @@ become findings. For each asset it:
 > vulnerable postures (`no-encryption`/`legacy-tls`/`non-pqc-classical`/`unknown`)
 > keep the worse-of behavior unchanged.
 
-`BuildFindings` is deliberately dependency-light (stdlib + uuid + `internal/risk`
-+ `internal/compliance` + `pkg/models`) so that the **same function** produces
+`BuildFindings` is deliberately dependency-light (stdlib `fmt`/`hash/fnv`/`time` +
+`internal/risk` + `internal/compliance` + `pkg/models`; it no longer imports `uuid`)
+so that the **same function** produces
 **identical *classification*** — posture, posture-first severity (worse-of Mosca
 only for non-quantum-resistant postures), Mosca score, and compliance mappings, all
 derived purely from the input asset — in three contexts:
-a live engine run (`internal/scanner/engine.go:235-237`), a `--mock` run
+a live engine run (via the `buildFindings` wrapper, `internal/scanner/engine.go:380-381`,
+called from `Run` at `engine.go:203`), a `--mock` run
 (`internal/scanner/mock_engine.go:34`), and the offline CBOM-replay path
-(`cmd/cryptamap/org_merge_files.go:97`).
+(`cmd/cryptamap/org_merge_files.go:112`).
 
-> **Caveat — findings are NOT byte-identical run-to-run.** `BuildFindings` stamps
-> two volatile fields on every call: `ID: uuid.NewString()` (a fresh random v4 UUID,
-> `internal/scanner/findings.go:56`) and `CreatedAt`/`UpdatedAt: time.Now().UTC()`
-> (`internal/scanner/findings.go:30,72-73`). So serialized `Finding` records differ
-> on `id` and the two timestamps every invocation; what is reproducible is the
-> *classification content* (posture/severity/Mosca/compliance), which is a pure
-> function of the asset. Any purity / reproducibility test must exclude `id`,
-> `createdAt`, and `updatedAt`.
+> **Caveat — findings are NOT byte-identical run-to-run.** The only volatile fields
+> are the timestamps: `BuildFindings` computes one `now = time.Now().UTC()` per call
+> and stamps it as `CreatedAt`/`UpdatedAt` on every finding
+> (`internal/scanner/findings.go:29,92-93`). `Finding.ID` is now the **deterministic**
+> content key `ID: stableFindingID(a, posture)` (`internal/scanner/findings.go:76`,
+> helper `findings.go:99-121`) — `finding:<key>:<posture>`, where `<key>` is the
+> asset's `BomRef` (or an FNV-64a hash of `account|region|service|resourceID` when
+> absent) — so it is stable across runs and finding artifacts diff cleanly. What is
+> reproducible is the *classification content* (posture/severity/Mosca/compliance)
+> **and** the `ID`; only `createdAt`/`updatedAt` differ per invocation, so a purity /
+> reproducibility test may rely on the stable `ID` and need only exclude the two
+> timestamps.
 
 ### 4.2 The `Finding` shape
 
@@ -276,7 +282,7 @@ A single `ScanResult` fans out to every enabled writer. In the local CLI path,
 
 | Format | Writer entry point | File suffix |
 |---|---|---|
-| CycloneDX CBOM | `output.WriteCBOM` (`internal/output/cyclonedx.go:63`) | `.cbom.json` |
+| CycloneDX CBOM | `output.WriteCBOM` (`internal/output/cyclonedx.go:66`) | `.cbom.json` |
 | PQCC Excel | `output.WritePQCCExcel` | `.pqcc.xlsx` |
 | HTML report | `output.WriteHTMLReport` | `.report.html` |
 | ASFF JSON | `output.WriteASFF` (`internal/output/securityhub.go:139`) | `.asff.json` |
@@ -312,8 +318,15 @@ plus per-service and per-account roll-ups (`internal/output/roadmap_writer.go:39
 ## 6. The CBOM schema (CycloneDX 1.7) field mapping
 
 The CBOM is the canonical, portable artifact. It is produced by `buildCBOM`
-(`internal/output/cyclonedx.go:70-154`) and consumed back by `ParseCBOM`
-(`internal/output/cbom_reader.go:39-87`) — a lossless round-trip.
+(`internal/output/cyclonedx.go:73-206`) and consumed back by `ParseCBOM`
+(`internal/output/cbom_reader.go:42-105`) — a **structurally lossless** round-trip
+for a CBOM CryptaMap itself produced (identity, `ResourceID`/`ResourceType`,
+postures, and deeper-detail crypto fields all survive), with **one deliberate
+security asymmetry on ingest**: a CBOM is *untrusted input*, so `ParseCBOM` does
+NOT round-trip the finding-suppressing `symmetric-only` posture verbatim — it
+SANITIZES it (§6.3). The verbatim `posture` restore for a genuine live scan (the
+in-process `WriteCBOM`→consumer path never re-parses) is unaffected; only the
+file-ingest path (`org-merge-files`) re-classifies.
 
 ### 6.1 Top-level BOM document
 
@@ -331,13 +344,31 @@ components[] = one per CryptoAsset
 `metadata.properties` carry scan context + **PQC-knowledge provenance**: the writer
 appends `knowledge:source/version/asOf/minAsOf/maxAsOf/factCount/digest` so every
 CBOM records how fresh the post-quantum knowledge was at scan time
-(`internal/output/cyclonedx.go:85-90,165-185`). The dashboard reads these back
+(`internal/output/cyclonedx.go:88-93,448-468`). The dashboard reads these back
 generically. See [`../SELF-UPDATING-KNOWLEDGE.md`](../SELF-UPDATING-KNOWLEDGE.md).
+
+`metadata.properties` also carry **scan-incompleteness markers** so a consumer handed
+only the CBOM file (not the stderr log or side-car summary) can tell an incomplete
+inventory from a clean one. `scanIncompletenessProps`
+(`internal/output/cyclonedx.go:401-438`) emits, **only when non-clean** (so a clean
+single-scan CBOM stays byte-identical to before):
+
+- `cryptamap:truncated` = `"true"` + `cryptamap:truncatedServices` (comma-joined,
+  sorted) when any scanner hit a cap (a `services.TruncationSentinel` error the engine
+  appends);
+- `cryptamap:scanErrors` = error count + `cryptamap:erroredServices` (comma-joined,
+  sorted) when any scanner returned a real error — so "0 assets" from an auth failure
+  is distinguishable from a legitimately empty account.
+
+For an **org-merged** CBOM the sibling `coverageProps`
+(`internal/output/cyclonedx.go:371-382`) additionally stamps the shard-reconciliation
+barrier (`cryptamap:incomplete`/`expectedShards`/`observedShards`/`missingShards`/
+`failedShards`); it returns nil (adds nothing) for a single live scan.
 
 ### 6.2 Component mapping (`CryptoAsset` → `CDXComponent`)
 
-`CDXComponent` (`internal/output/cyclonedx.go:53-60`). The mapping in
-`buildCBOM` (`internal/output/cyclonedx.go:94-152`):
+`CDXComponent` (`internal/output/cyclonedx.go:56-63`). The mapping in
+`buildCBOM` (`internal/output/cyclonedx.go:106-201`):
 
 | CBOM field | Source | Note |
 |---|---|---|
@@ -350,9 +381,20 @@ generically. See [`../SELF-UPDATING-KNOWLEDGE.md`](../SELF-UPDATING-KNOWLEDGE.md
 
 The flat `properties[]` array carries everything else, namespaced `cryptamap:`:
 `service` (raw scanner id), `category`, `accountId`, `region`, `resourceArn`, and
-(when present) `resourceType`, `displayName`, `awsCategory`, `cryptoFunction`,
-`subAspect`, plus **every** `asset.Properties` entry — including `posture`
-(`internal/output/cyclonedx.go:97-129`).
+(when present) `resourceType`, **`resourceId`**, `displayName`, `awsCategory`,
+`cryptoFunction`, `subAspect`, plus **every** `asset.Properties` entry — including
+`posture` (`internal/output/cyclonedx.go:113-161`).
+
+> **Losslessness of `ResourceID` (load-bearing).** `buildCBOM` now emits the
+> `ResourceID` verbatim as `cryptamap:resourceId`
+> (`internal/output/cyclonedx.go:129-135`), alongside the already-explicit
+> `cryptamap:resourceType`. Previously the reader re-derived the id from the ARN via
+> `resourceFromARN`, which splits on the **last** `/`
+> (`internal/output/cbom_reader.go:396-410`) — so a slash-containing id such as a KMS
+> alias `alias/aws/dynamodb` or an S3-path-style key would be **corrupted** (only the
+> trailing segment survived) on re-ingest. Carrying the id as its own property makes
+> the round-trip lossless for it; older CBOMs without the property still fall back to
+> the ARN-split (`internal/output/cbom_reader.go:126-141`).
 
 > **Schema-validity trick (load-bearing).** CycloneDX 1.7 marks
 > `cryptoProperties.algorithmProperties` and `.protocolProperties` as
@@ -360,9 +402,9 @@ The flat `properties[]` array carries everything else, namespaced `cryptamap:`:
 > (`AlgorithmName`, `KeySizeBits`, `KMSKeySpec`, `KeyExchangeGroup`, `PQCHybrid`,
 > `CertSignatureAlgorithm`, `CertKeySizeBits`, `TLSMinVersion`) would be rejected if
 > emitted inside those sub-objects. So `deeperDetailProps`
-> (`internal/output/cyclonedx.go:193-224`) relocates them to flat
+> (`internal/output/cyclonedx.go:497-549`) relocates them to flat
 > `cryptamap:algorithmName` / `cryptamap:tlsMinVersion` / etc. component
-> properties, and `sanitizeForCDX` (`internal/output/cyclonedx.go:231-250`) zeroes
+> properties, and `sanitizeForCDX` (`internal/output/cyclonedx.go:579-635`) zeroes
 > them out of the marshaled `cryptoProperties` (without mutating the in-memory
 > model). The canonical CycloneDX fields (`ParameterSetIdentifier`, `Mode`,
 > `ClassicalSecurityLevel`, …) are preserved.
@@ -419,19 +461,43 @@ via `realComponents`) excludes them, so they never inflate asset counts or creat
 phantom account/region shards. The result is a CBOM with **zero dangling
 references** — verified by `internal/output/crypto_graph_test.go`.
 
-### 6.3 The lossless round-trip (`ParseCBOM`)
+### 6.3 The round-trip (`ParseCBOM`) — structurally lossless, posture sanitized
 
-`componentToAsset` (`internal/output/cbom_reader.go:95-149`) reverses every step:
-it de-prefixes `cryptamap:*` props (so `Properties["posture"]` is restored exactly
-as `BuildFindings` reads it), maps the structural props back to dedicated fields,
-and folds the flat deeper-detail props back into `CryptoProps` via
-`foldDeeperDetail` (`internal/output/cbom_reader.go:167-204`). It prefers the
-explicit `cryptamap:resourceType` property and falls back to deriving it from the
-ARN for older CBOMs (`internal/output/cbom_reader.go:110-117`) — this is why the
-writer emits `resourceType` explicitly, since the region-less S3 ARN carries no
-`<type>/<id>` segment to re-derive from. Reconstructed shards have `Assets` populated
-but **`Findings` empty** — the caller regenerates them via `BuildFindings`
-(`internal/output/cbom_reader.go:22-25`).
+`componentToAsset` (`internal/output/cbom_reader.go:113-193`) reverses every step:
+it de-prefixes `cryptamap:*` props, maps the structural props back to dedicated
+fields, and folds the flat deeper-detail props back into `CryptoProps` via
+`foldDeeperDetail` (`internal/output/cbom_reader.go:310-356`). It prefers the
+explicit `cryptamap:resourceId` / `cryptamap:resourceType` properties and only falls
+back to deriving them from the ARN for older CBOMs
+(`internal/output/cbom_reader.go:126-141`) — this is why the writer emits both
+explicitly: the region-less S3 ARN carries no `<type>/<id>` segment to re-derive
+from, and `resourceFromARN`'s last-`/` split would otherwise corrupt a
+slash-containing id (§6.2). Reconstructed shards have `Assets` populated but
+**`Findings` empty** — the caller regenerates them via `BuildFindings`
+(`internal/output/cbom_reader.go:22-27`).
+
+> **Posture is SANITIZED on ingest, not restored verbatim (security).** An ingested
+> CBOM is *untrusted input*, so `ParseCBOM` treats it as such rather than as a live
+> scan (`internal/output/cbom_reader.go:54-64` forces a non-`live` `mode` so a
+> hand-edited file cannot win merge source-precedence; `internal/output/cbom_reader.go:154-161`
+> likewise drops `source`). The load-bearing case is `posture`: `BuildFindings`
+> emits **no finding at all** for `posture=symmetric-only` (Grover-only,
+> inventory-only — `internal/scanner/findings.go:40-47`), so a tampered file that
+> flips a vulnerable asset to `symmetric-only` would silence its finding on ingest.
+> `sanitizeIngestedPosture` (`internal/output/cbom_reader.go:216-233`) therefore
+> honors an ingested `symmetric-only` **only when the file's own `cryptoProperties`
+> corroborate a symmetric primitive** (`symmetricOnlyCorroborated`,
+> `internal/output/cbom_reader.go:241-276`); an uncorroborated claim **degrades to
+> `unknown`** (→ MEDIUM, "needs investigation") with an auditable `note`. All other
+> postures round-trip verbatim (they still produce a finding, so they cannot make an
+> asset vanish). This is deliberate minimal hardening — it raises tamper effort from
+> a one-field flip to a consistent multi-field forgery; full protection needs shard
+> signing, which ingestion does not yet do.
+>
+> This is why §6's opener calls the round-trip lossless **structurally** (identity,
+> `ResourceID`, deeper-detail crypto all survive) but not blindly verbatim on the
+> untrusted-ingest path. A genuine live scan never re-parses its own CBOM in-process,
+> so a real scanner's `symmetric-only` is unaffected.
 
 ---
 
@@ -553,7 +619,12 @@ same merge from **local CBOM files** with no AWS at all: it `ParseCBOMFile`s eac
 input into shards, regenerates findings via `BuildFindings`
 (`cmd/cryptamap/org_merge_files.go:97`) — because CBOMs are findings-lossy — then
 `merge.Merge` + writes the merged CBOM + roadmap + coverage. This is the
-no-network, no-mutation demonstration of the merge pipeline.
+no-network, no-mutation demonstration of the merge pipeline. It is also the **one
+consumer that re-parses an untrusted CBOM file**, so it is where the ingest-side
+hardening of §6.3 actually bites: a hand-edited shard's `mode`/`source`/uncorroborated
+`symmetric-only` `posture` are neutralized by `ParseCBOM` before `BuildFindings`
+runs, so a crafted file can neither outrank a real scan in dedup nor silence a
+vulnerable asset's finding.
 
 ---
 
@@ -574,8 +645,10 @@ the data source:
   `dashboard/src/hooks/useScanData.ts`, not in `api.ts`.
 - **Live mode** (dormant — not provisioned by anything CryptaMap ships): if a
   non-empty `apiBase` were configured, the client would GET `${apiBase}/cbom`,
-  `${apiBase}/summary`, `${apiBase}/roadmap` (and `/scans`, `/history`)
-  (`dashboard/src/services/api.ts:51,115,192`). **No CryptaMap component ever sets
+  `${apiBase}/summary`, and `${apiBase}/roadmap`
+  (`dashboard/src/services/api.ts`). The `/scans` and `/history` client helpers
+  were dead code (zero call sites after the local-first redesign removed those
+  endpoints) and have been deleted. **No CryptaMap component ever sets
   `apiBase`** — the query API + CloudFront dashboard that once backed this branch
   were removed in the local-first redesign, and `cryptamap serve` hard-codes
   `apiBase:""`. The branch is retained only as an extension point for an operator
@@ -622,7 +695,7 @@ flowchart LR
       APIs["AWS APIs"]
     end
     subgraph central["Central account (orchestrator's home region)"]
-      S3["Results S3 bucket<br/>(SSE-AES256)"]
+      S3["Results S3 bucket<br/>(SSE-KMS / CMK default)"]
       DDB["SCANS_TABLE"]
     end
     subgraph local["Operator laptop / Cloud Desktop"]
@@ -649,9 +722,14 @@ flowchart LR
   region is **kept at the central home region on purpose**: repointing it to the
   scan region caused a cross-region write failure where only `us-east-1` shards
   landed (verified 2026-06-04, documented at `cmd/cryptamap/lambda.go:73-78`).
-- **At rest:** all S3 PutObjects set `ServerSideEncryption: AES256`
-  (`internal/output/s3_writer.go:45,65,78`); the merge-path puts do the same
-  (`cmd/cryptamap/lambda_merge.go:178,267`).
+- **At rest:** S3 PutObjects set **no explicit `ServerSideEncryption` header**, so
+  every object inherits the results bucket's **default encryption — a customer-managed
+  KMS CMK** (`internal/output/s3_writer.go:39-46`, `cmd/cryptamap/lambda_merge.go:259-266`;
+  bucket default at `cdk/lib/data-stack.ts:65-83`). A bucket resource policy additionally
+  **denies** any `s3:PutObject` whose `s3:x-amz-server-side-encryption` is not `aws:kms`
+  (`cdk/lib/data-stack.ts:93-104`), so a future writer regression to SSE-S3 fails at put
+  time. (Earlier revisions forced `ServerSideEncryption: AES256`, which silently overrode
+  the CMK — removed as part of the SSE-KMS remediation.)
 - **Member-account access is read-only:** scanners issue only `List`/`Describe`
   calls; the assumed role is verified before any scan (`cmd/cryptamap/lambda.go:100-118`).
 
@@ -680,9 +758,11 @@ The exact lines where data changes shape — useful as a jump table.
 | posture+Mosca → severity | `HighestSeverity` | `internal/risk/severity.go:38-43` |
 | Mosca X+Y−Z | `Calculate` | `internal/risk/mosca.go:12-23` |
 | assets+findings → `ScanResult` | `Engine.Run` | `internal/scanner/engine.go:72-163` |
-| `ScanResult` → CBOM | `buildCBOM` | `internal/output/cyclonedx.go:70-154` |
-| additive fields → flat props | `deeperDetailProps` / `sanitizeForCDX` | `internal/output/cyclonedx.go:193-250` |
-| CBOM → `ScanResult` (round-trip) | `componentToAsset` | `internal/output/cbom_reader.go:95-149` |
+| `ScanResult` → CBOM | `buildCBOM` | `internal/output/cyclonedx.go:73-206` |
+| additive fields → flat props | `deeperDetailProps` / `sanitizeForCDX` | `internal/output/cyclonedx.go:497-635` |
+| incompleteness → CBOM metadata | `scanIncompletenessProps` / `coverageProps` | `internal/output/cyclonedx.go:401-438,371-382` |
+| CBOM → `ScanResult` (round-trip) | `componentToAsset` | `internal/output/cbom_reader.go:113-193` |
+| ingested posture sanitize (untrusted) | `sanitizeIngestedPosture` | `internal/output/cbom_reader.go:216-233` |
 | `Finding` → ASFF | `BuildASFFFinding` | `internal/output/securityhub.go:73-136` |
 | `ScanResult` → Roadmap | `roadmap.Build` | `internal/roadmap/roadmap.go:91` |
 | shard fold (memory-bounded) | `Merger.Add` / `AddPreMerged` | `internal/merge/streaming.go:72-199` |
@@ -698,7 +778,9 @@ The exact lines where data changes shape — useful as a jump table.
 > order — whether they come from a live scan, `--mock`, the offline
 > `org-merge-files` replay, or the org Lambda merge. This is the property the whole
 > multi-path architecture relies on. Note it is *classification* determinism, not
-> byte-for-byte output: each `Finding` gets a fresh random `id` and `time.Now()`
-> timestamps (`internal/scanner/findings.go:56,30,72-73`), and each CBOM gets a
-> fresh `urn:uuid` `serialNumber` (§6.1), so the serialized bytes vary run-to-run
-> even when the classified content is identical.
+> byte-for-byte output: each `Finding` gets one per-call `CreatedAt`/`UpdatedAt`
+> `time.Now().UTC()` timestamp (`internal/scanner/findings.go:29,92-93`) — its `ID` is
+> the **deterministic** `stableFindingID(a, posture)` content key (`findings.go:76`),
+> stable across runs — and each CBOM gets a fresh `urn:uuid` `serialNumber` (§6.1),
+> so the serialized bytes vary run-to-run only on the finding timestamps and the CBOM
+> serial number, even when the classified content and finding ids are identical.

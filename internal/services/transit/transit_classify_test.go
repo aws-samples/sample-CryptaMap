@@ -127,8 +127,13 @@ func TestClassifyVPNTunnel(t *testing.T) {
 }
 
 // TestClassifyMSKTransit covers Plaintext -> no-encryption/none, TLS -> non-pqc
-// (enforced), TLS_PLAINTEXT -> not-fully-enforced mixed mode, and that the
-// InCluster pointer is surfaced as a string.
+// (enforced), TLS_PLAINTEXT -> not-fully-enforced mixed mode, that the
+// InCluster pointer is surfaced as a string, and that no TLS version is
+// fabricated: the kafka API exposes only the ClientBroker mode, never a
+// negotiated TLS version, so ver must stay EMPTY for the TLS modes (the old
+// hardcoded "1.2" was a fabrication) and an empty/unrecognized enum must
+// return Unknown with enforced left empty, never a guessed enforced-classical
+// default.
 func TestClassifyMSKTransit(t *testing.T) {
 	t.Run("plaintext", func(t *testing.T) {
 		ver, suite, posture, _, inCluster, enforced := classifyMSKTransit("PLAINTEXT", nil)
@@ -149,8 +154,10 @@ func TestClassifyMSKTransit(t *testing.T) {
 	t.Run("tls with in-cluster true", func(t *testing.T) {
 		b := true
 		ver, _, posture, props, inCluster, enforced := classifyMSKTransit("TLS", &b)
-		if ver != "1.2" {
-			t.Errorf("ver=%q, want 1.2", ver)
+		// The kafka API does not expose a negotiated TLS version — asserting
+		// "1.2" here was a fabrication. Nothing provable => empty version.
+		if ver != "" {
+			t.Errorf("ver=%q, want \"\" (no TLS version is exposed by the API; a hardcoded 1.2 is fabricated)", ver)
 		}
 		if posture != models.PostureNonPQCClassical {
 			t.Errorf("posture=%q, want %q", posture, models.PostureNonPQCClassical)
@@ -168,9 +175,12 @@ func TestClassifyMSKTransit(t *testing.T) {
 
 	t.Run("tls_plaintext is mixed/not-enforced (not clean TLS)", func(t *testing.T) {
 		b := false
-		_, suite, posture, _, inCluster, enforced := classifyMSKTransit("TLS_PLAINTEXT", &b)
+		ver, suite, posture, _, inCluster, enforced := classifyMSKTransit("TLS_PLAINTEXT", &b)
 		// Must NOT be reported identically to a pure-TLS cluster: it permits
 		// plaintext client-broker traffic by definition.
+		if ver != "" {
+			t.Errorf("ver=%q, want \"\" (no TLS version is exposed; a fabricated one must not survive)", ver)
+		}
 		if posture != models.PostureLegacyTLS {
 			t.Errorf("posture=%q, want %q (mixed mode permits plaintext)", posture, models.PostureLegacyTLS)
 		}
@@ -184,34 +194,154 @@ func TestClassifyMSKTransit(t *testing.T) {
 			t.Errorf("inCluster=%q, want false", inCluster)
 		}
 	})
+
+	t.Run("empty client-broker -> unknown, nothing fabricated", func(t *testing.T) {
+		ver, _, posture, _, _, enforced := classifyMSKTransit("", nil)
+		if posture != models.PostureUnknown {
+			t.Errorf("posture=%q, want %q (empty enum proves nothing)", posture, models.PostureUnknown)
+		}
+		if ver != "" {
+			t.Errorf("ver=%q, want \"\" (no fabricated TLS version for an unread value)", ver)
+		}
+		if enforced != "" {
+			t.Errorf("enforced=%q, want \"\" (enforcement unproven, caller must skip the doc-fact stamp)", enforced)
+		}
+	})
+
+	t.Run("unrecognized future enum -> unknown, nothing fabricated", func(t *testing.T) {
+		ver, _, posture, _, _, enforced := classifyMSKTransit("FUTURE_ENUM", nil)
+		if posture != models.PostureUnknown {
+			t.Errorf("posture=%q, want %q (unrecognized enum must not keep the enforced-classical default)", posture, models.PostureUnknown)
+		}
+		if ver != "" {
+			t.Errorf("ver=%q, want \"\"", ver)
+		}
+		if enforced != "" {
+			t.Errorf("enforced=%q, want \"\"", enforced)
+		}
+	})
+}
+
+// TestClassifyDBSSLEnforcementEmpty pins the tri-state honesty of the parameter
+// scan: no parameters at all (nil map) and a present-but-empty toggle value both
+// mean the effective state could not be read, so the result must be unknown —
+// never a fabricated enforced all-clear nor a fabricated not-enforced alarm.
+func TestClassifyDBSSLEnforcementEmpty(t *testing.T) {
+	if got := classifyDBSSLEnforcement(nil); got != dbSSLUnknown {
+		t.Errorf("classifyDBSSLEnforcement(nil)=%q, want %q", got, dbSSLUnknown)
+	}
+	if got := classifyDBSSLEnforcement(map[string]string{}); got != dbSSLUnknown {
+		t.Errorf("classifyDBSSLEnforcement(empty map)=%q, want %q", got, dbSSLUnknown)
+	}
+	// Toggle present but with an empty value (unreadable engine default) — the
+	// engine default is not universally off, so this must stay unknown.
+	if got := classifyDBSSLEnforcement(map[string]string{"rds.force_ssl": ""}); got != dbSSLUnknown {
+		t.Errorf("classifyDBSSLEnforcement(empty value)=%q, want %q", got, dbSSLUnknown)
+	}
+}
+
+// TestClassifyVPNTunnelDHGroups pins the all-groups CBOM contract: a tunnel
+// permitting a weak DH group (group 2, 1024-bit MODP) alongside a strong one
+// (group 20) must surface BOTH in the ipsec-dh-groups cipher suite — the weak
+// group must not vanish just because it is not first.
+func TestClassifyVPNTunnelDHGroups(t *testing.T) {
+	props := classifyVPNTunnel(nil, nil, nil, nil, []int32{2, 20}, nil)
+	pp := props.ProtocolProperties
+	if pp == nil {
+		t.Fatalf("ProtocolProperties=nil, want non-nil")
+	}
+	if pp.KeyExchangeGroup != "DH-group-2" {
+		t.Errorf("KeyExchangeGroup=%q, want DH-group-2 (first permitted group)", pp.KeyExchangeGroup)
+	}
+	dh := suiteByName(pp.CipherSuites, "ipsec-dh-groups")
+	if dh == nil {
+		t.Fatalf("ipsec-dh-groups suite missing: all permitted DH groups must be recorded, not only the first")
+	}
+	got := map[string]bool{}
+	for _, a := range dh.Algorithms {
+		got[a] = true
+	}
+	for _, want := range []string{"DH-group-2", "DH-group-20"} {
+		if !got[want] {
+			t.Errorf("ipsec-dh-groups=%v, want it to contain %q (weak groups must not vanish from the CBOM)", dh.Algorithms, want)
+		}
+	}
+	if pp.PQCHybrid {
+		t.Errorf("PQCHybrid=%v, want false (classical DH groups)", pp.PQCHybrid)
+	}
 }
 
 // TestClassifyOpenSearchTLSPolicy verifies the four REAL enum values map to the
-// correct ver/posture and that PQCHybrid is never set (none are post-quantum).
+// correct FLOOR (minVer) and CEILING (maxVer) separately — a floor-1.2 policy
+// that merely permits up to 1.3 must report a 1.2 floor, never a fabricated 1.3
+// floor — that PQCHybrid is never set (none are post-quantum), and that an
+// empty/unrecognized policy is Unknown, not a guessed "1.2 classical" default.
 func TestClassifyOpenSearchTLSPolicy(t *testing.T) {
 	cases := []struct {
 		policy      string
-		wantVer     string
+		wantMin     string
+		wantMax     string
 		wantPosture models.CryptoPosture
 	}{
-		{"Policy-Min-TLS-1-0-2019-07", "1.0", models.PostureLegacyTLS},
-		{"Policy-Min-TLS-1-2-2019-07", "1.2", models.PostureNonPQCClassical},
-		{"Policy-Min-TLS-1-2-PFS-2023-10", "1.3", models.PostureNonPQCClassical},
-		{"Policy-Min-TLS-1-2-RFC9151-FIPS-2024-08", "1.3", models.PostureNonPQCClassical},
-		{"", "1.2", models.PostureNonPQCClassical},                    // empty default
-		{"Some-Unknown-Policy", "1.2", models.PostureNonPQCClassical}, // unrecognized default
+		{"Policy-Min-TLS-1-0-2019-07", "1.0", "1.2", models.PostureLegacyTLS},
+		{"Policy-Min-TLS-1-2-2019-07", "1.2", "1.2", models.PostureNonPQCClassical},
+		// PFS policy: FLOOR is 1.2 (Min-TLS-1-2), ceiling 1.3. Reporting the
+		// floor as 1.3 was the fabrication that made "floor>=1.3" checks pass.
+		{"Policy-Min-TLS-1-2-PFS-2023-10", "1.2", "1.3", models.PostureNonPQCClassical},
+		{"Policy-Min-TLS-1-2-RFC9151-FIPS-2024-08", "1.2", "1.3", models.PostureNonPQCClassical},
+		// Empty/unrecognized: nothing provable -> Unknown, no fabricated floor.
+		{"", "", "", models.PostureUnknown},
+		{"Some-Unknown-Policy", "", "", models.PostureUnknown},
 	}
 	for _, c := range cases {
 		t.Run(c.policy, func(t *testing.T) {
-			ver, posture, pqc := classifyOpenSearchTLSPolicy(c.policy)
-			if ver != c.wantVer {
-				t.Errorf("ver=%q, want %q", ver, c.wantVer)
+			minVer, maxVer, posture, pqc := classifyOpenSearchTLSPolicy(c.policy)
+			if minVer != c.wantMin {
+				t.Errorf("minVer=%q, want %q (the floor, never the ceiling)", minVer, c.wantMin)
+			}
+			if maxVer != c.wantMax {
+				t.Errorf("maxVer=%q, want %q", maxVer, c.wantMax)
 			}
 			if posture != c.wantPosture {
 				t.Errorf("posture=%q, want %q", posture, c.wantPosture)
 			}
 			if pqc {
 				t.Errorf("pqcHybrid=%v, want false (no OpenSearch TLS policy is PQ)", pqc)
+			}
+		})
+	}
+}
+
+// TestClassifyTransferProtocols verifies the plaintext-FTP override: FTP-only
+// is plaintext-only, FTP mixed with encrypted protocols is not-enforced (both
+// with an explanatory note), and a no-FTP or absent list never fabricates an
+// alarm.
+func TestClassifyTransferProtocols(t *testing.T) {
+	cases := []struct {
+		name      string
+		protocols []string
+		wantOnly  bool
+		wantMixed bool
+		wantNote  bool
+	}{
+		{"ftp only", []string{"FTP"}, true, false, true},
+		{"ftp mixed with sftp", []string{"SFTP", "FTP"}, false, true, true},
+		{"ftp mixed with ftps", []string{"FTP", "FTPS"}, false, true, true},
+		{"sftp only", []string{"SFTP"}, false, false, false},
+		{"encrypted only", []string{"SFTP", "FTPS", "AS2"}, false, false, false},
+		{"empty list (unreadable) -> no fabricated alarm", nil, false, false, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			only, mixed, note := classifyTransferProtocols(c.protocols)
+			if only != c.wantOnly {
+				t.Errorf("ftpOnly=%v, want %v", only, c.wantOnly)
+			}
+			if mixed != c.wantMixed {
+				t.Errorf("ftpMixed=%v, want %v", mixed, c.wantMixed)
+			}
+			if (note != "") != c.wantNote {
+				t.Errorf("note=%q, wantNote=%v", note, c.wantNote)
 			}
 		})
 	}

@@ -3,6 +3,7 @@ package transit
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -220,5 +221,68 @@ func TestVPCLatticeScanHonestyPosture(t *testing.T) {
 	}
 	if note := httpAsset.Properties["note"]; note == "" {
 		t.Error("HTTP listener: expected an explanatory plaintext note, got empty")
+	}
+}
+
+// TestVPCLatticeTlsPassthroughNoFabrication verifies the passthrough honesty
+// contract: a TLS_PASSTHROUGH listener forwards TLS to the backend target, so
+// VPC Lattice does not terminate it and cannot see the negotiated version,
+// ciphers, or certificate. Even when the SERVICE has an ACM cert (used only for
+// Lattice-terminated HTTPS), the passthrough listener must NOT:
+//   - assert a TLS version floor (Version must be empty, not the doc "1.2"),
+//   - claim doc-fact provenance on the protocol block (Source empty),
+//   - attach the service certificateArn as evidence.
+//
+// It must still carry a classical (encrypted end-to-end) posture and an
+// explanatory passthrough note.
+func TestVPCLatticeTlsPassthroughNoFabrication(t *testing.T) {
+	client := &fakeVPCLatticeClient{
+		servicesPages: []*vpclattice.ListServicesOutput{
+			{Items: []vltypes.ServiceSummary{{Id: vpclatticeStrptr("svc-pt")}}},
+		},
+		listenersByService: map[string][]*vpclattice.ListListenersOutput{
+			"svc-pt": {
+				{
+					Items: []vltypes.ListenerSummary{
+						{Arn: vpclatticeStrptr("arn:l:passthrough"), Protocol: vltypes.ListenerProtocolTlsPassthrough},
+					},
+				},
+			},
+		},
+		certByService: map[string]string{
+			// The service DOES have a cert — but it belongs to Lattice-terminated
+			// HTTPS listeners only, never to a passthrough listener.
+			"svc-pt": "arn:aws:acm:us-east-1:111122223333:certificate/svc-pt-cert",
+		},
+	}
+
+	assets, err := VPCLatticeScanner{}.scan(context.Background(), client, newACMCertResolver(aws.Config{}), "111122223333", "us-east-1")
+	if err != nil {
+		t.Fatalf("scan returned unexpected error: %v", err)
+	}
+	a := vpclatticeAssetByID(assets, "arn:l:passthrough")
+	if a == nil {
+		t.Fatal("expected the TLS_PASSTHROUGH listener to appear as an asset")
+	}
+
+	pp := a.CryptoProps.ProtocolProperties
+	if pp == nil {
+		t.Fatal("expected ProtocolProperties on the passthrough listener")
+	}
+	if pp.Version != "" {
+		t.Errorf("passthrough Version=%q, want \"\" (Lattice cannot see the backend-negotiated version; a 1.2 floor here is fabricated)", pp.Version)
+	}
+	if pp.Source != "" {
+		t.Errorf("passthrough ProtocolProperties.Source=%q, want \"\" (the vpc-lattice HTTPS doc guarantee does not cover passthrough)", pp.Source)
+	}
+	if arn, ok := a.Properties["certificateArn"]; ok {
+		t.Errorf("passthrough listener must NOT attach the service certificateArn (%q) as evidence — the cert is used only for Lattice-terminated HTTPS", arn)
+	}
+	note := a.Properties["note"]
+	if note == "" || !strings.Contains(strings.ToLower(note), "passthrough") {
+		t.Errorf("passthrough note=%q, want a note explaining TLS passthrough (backend-terminated)", note)
+	}
+	if p := vpclatticePostureOf(a); p != string(models.PostureNonPQCClassical) {
+		t.Errorf("passthrough posture=%q, want %q (traffic is still TLS end-to-end, classical)", p, models.PostureNonPQCClassical)
 	}
 }

@@ -2,8 +2,7 @@ import * as cdk from 'aws-cdk-lib';
 import { Construct } from 'constructs';
 import * as sns from 'aws-cdk-lib/aws-sns';
 import * as snssubs from 'aws-cdk-lib/aws-sns-subscriptions';
-import * as events from 'aws-cdk-lib/aws-events';
-import * as targets from 'aws-cdk-lib/aws-events-targets';
+import * as iam from 'aws-cdk-lib/aws-iam';
 import * as kms from 'aws-cdk-lib/aws-kms';
 import * as budgets from 'aws-cdk-lib/aws-budgets';
 import * as cloudwatch from 'aws-cdk-lib/aws-cloudwatch';
@@ -32,7 +31,6 @@ export interface AlertingStackProps extends cdk.StackProps {
    * operational alarms.
    */
   readonly seedFn?: lambda.IFunction;
-  readonly mergeFn?: lambda.IFunction;
   readonly stateMachine?: sfn.IStateMachine;
   /**
    * Optional dead-letter queue (e.g. async-invoke or SFN failure DLQ). When
@@ -56,6 +54,17 @@ export class AlertingStack extends cdk.Stack {
       removalPolicy: cdk.RemovalPolicy.RETAIN,
     });
 
+    // CloudWatch is the topic's PRIMARY publisher (the operational alarms below
+    // publish via cwactions.SnsAction). Publishing to a CMK-encrypted SNS topic
+    // requires the CloudWatch service principal to hold kms:Decrypt +
+    // kms:GenerateDataKey* on the topic key — CDK's SnsAction adds NO KMS grant,
+    // so without this the alarm still transitions to ALARM but the notification
+    // is dropped SILENTLY: every "never silent" operational alarm would deliver
+    // nothing. Scope to this account as defence-in-depth.
+    topicKey.grantEncryptDecrypt(new iam.ServicePrincipal('cloudwatch.amazonaws.com', {
+      conditions: { StringEquals: { 'aws:SourceAccount': cdk.Stack.of(this).account } },
+    }));
+
     this.topic = new sns.Topic(this, 'CriticalFindings', {
       displayName: 'CryptaMap CRITICAL findings',
       masterKey: topicKey,
@@ -65,29 +74,28 @@ export class AlertingStack extends cdk.Stack {
       this.topic.addSubscription(new snssubs.EmailSubscription(props.alertEmail));
     }
 
-    const rule = new events.Rule(this, 'CriticalSecurityHubRule', {
-      eventPattern: {
-        source: ['aws.securityhub'],
-        detailType: ['Security Hub Findings - Imported'],
-        detail: {
-          findings: {
-            ProductFields: { 'aws/securityhub/ProductName': ['CryptaMap'] },
-            Severity: { Label: ['CRITICAL'] },
-          },
-        },
-      },
-    });
-    rule.addTarget(new targets.SnsTopic(this.topic));
+    // NOTE: a Security Hub CRITICAL-findings EventBridge rule used to live here,
+    // routing aws.securityhub "Findings - Imported" events with ProductName
+    // "CryptaMap" to this topic. It was DEAD end-to-end and has been removed:
+    // nothing in the codebase ever calls securityhub:BatchImportFindings (the Go
+    // module does not import the securityhub SDK; ASFF output is written as a
+    // local file only), so no matching event is ever produced; and even a manual
+    // batch-import of the emitted file uses the account-default product ARN,
+    // which Security Hub stamps with ProductName "Default", not "CryptaMap", so
+    // the pattern could never match. The operational alarms below (which DO fire)
+    // are the topic's real publishers. If a live Security Hub push is added
+    // later, reinstate a rule whose pattern matches what Security Hub actually
+    // stamps, and restore the orchestrator's securityhub:BatchImportFindings
+    // grant at that time.
 
     new cdk.CfnOutput(this, 'AlertTopicArn', { value: this.topic.topicArn });
 
     // ------------------------------------------------------------------
     // OPERATIONAL alarms — so a FAILED org scan is never silent.
     //
-    // The SecurityHub rule above only fires on a CRITICAL *business* finding
-    // (a discovered crypto weakness). It says nothing about the pipeline that
-    // produces those findings actually running. These alarms watch the scan
-    // machinery itself: if a scanner/seed/merge Lambda errors, or the org Step
+    // These alarms watch the scan machinery itself (there is no business-finding
+    // route — the Security Hub rule that once lived above was removed as dead):
+    // if a scanner/seed Lambda errors, or the org Step
     // Functions execution fails or times out, the same on-call SNS topic is
     // notified. Count metrics use Sum over the period (per the Lambda / Step
     // Functions CloudWatch metric guidance — metricErrors / metricFailed /
@@ -119,9 +127,9 @@ export class AlertingStack extends cdk.Stack {
     if (props.seedFn) {
       errorAlarm('SeedFnErrorsAlarm', props.seedFn, 'seed (org-account enumeration)');
     }
-    if (props.mergeFn) {
-      errorAlarm('MergeFnErrorsAlarm', props.mergeFn, 'merge (result rollup)');
-    }
+    // (The merge rollup Lambda was removed; the Go merge runs inside the org
+    // state machine, so OrgScanFailedAlarm / OrgScanTimedOutAlarm below cover a
+    // failed merge step.)
 
     // Org Step Functions state machine: a failed or timed-out org scan must page.
     if (props.stateMachine) {
@@ -153,6 +161,34 @@ export class AlertingStack extends cdk.Stack {
       });
       timedOutAlarm.addAlarmAction(snsAction);
       timedOutAlarm.addOkAction(snsAction);
+
+      // Silent-incompleteness alarm: a state-machine execution can SUCCEED while
+      // the merged org CBOM is incomplete (vanished/errored shards, missing
+      // per-account objects). The Failed/TimedOut alarms above never fire then, so
+      // this alarm keys off the ScanIncomplete metric the merge Lambda publishes
+      // via EMF (cmd/cryptamap/lambda_merge.go emitScanCoverageMetric → namespace
+      // "CryptaMap"). ScanIncomplete=1 on any incomplete run, 0 otherwise; Sum over
+      // the period so any incomplete run in the window breaches. treatMissingData
+      // notBreaching: no merge in the window is not itself a failure.
+      const scanIncompleteAlarm = new cloudwatch.Alarm(this, 'OrgScanIncompleteAlarm', {
+        alarmName: `${cdk.Stack.of(this).stackName}-OrgScanIncompleteAlarm`,
+        alarmDescription:
+          'CryptaMap operational: the org scan SUCCEEDED but the merged CBOM is ' +
+          'INCOMPLETE (>=1 shard/account was dropped or errored). The result is a ' +
+          'silently-smaller inventory — investigate MissingShards/FailedShards.',
+        metric: new cloudwatch.Metric({
+          namespace: 'CryptaMap',
+          metricName: 'ScanIncomplete',
+          period: cdk.Duration.minutes(5),
+          statistic: cloudwatch.Stats.SUM,
+        }),
+        threshold: 1,
+        evaluationPeriods: 1,
+        comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD,
+        treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
+      });
+      scanIncompleteAlarm.addAlarmAction(snsAction);
+      scanIncompleteAlarm.addOkAction(snsAction);
     }
 
     // Optional DLQ depth alarm (defensive — no DLQ exists in the current

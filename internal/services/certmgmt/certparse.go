@@ -6,6 +6,7 @@ import (
 	"crypto/rsa"
 	"crypto/x509"
 	"encoding/pem"
+	"time"
 
 	"github.com/aws-samples/cryptamap/pkg/models"
 )
@@ -26,6 +27,12 @@ type parsedCert struct {
 	// AlgoProps carries the public-key size / curve when the key type is
 	// recognized; nil otherwise.
 	AlgoProps *models.AlgorithmProperties
+	// NotBefore / NotAfter are the certificate's real validity window, read
+	// from the parsed x509 cert. Zero on parse failure — never fabricated.
+	// Expiry-driven reporting depends on these; without them an expired device
+	// cert is indistinguishable from a valid one.
+	NotBefore time.Time
+	NotAfter  time.Time
 	// Posture is derived from the parsed key/signature algorithm: RSA / ECDSA /
 	// Ed25519 -> NonPQCClassical; an unrecognized OID or a parse error ->
 	// Unknown (we do NOT re-assert a classical default for what we could not
@@ -54,6 +61,8 @@ func parseCertPEM(pemBody string) parsedCert {
 		return res
 	}
 
+	res.NotBefore = cert.NotBefore
+	res.NotAfter = cert.NotAfter
 	if cert.SignatureAlgorithm != x509.UnknownSignatureAlgorithm {
 		res.SigAlgo = cert.SignatureAlgorithm.String()
 	}

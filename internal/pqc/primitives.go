@@ -117,6 +117,18 @@ var primitives = map[string]PrimitiveEntry{
 		Strength:          StrengthSafe,
 		Rationale:         "Grover gives only a quadratic speedup, halving effective key strength to ~128 bits, which remains infeasible to brute-force. AWS KMS SYMMETRIC_DEFAULT is AES-256-GCM and is explicitly described by AWS as quantum resistant; at-rest data needs no re-encryption.",
 	},
+	"AES-256-XTS": {
+		Primitive:         "AES-256-XTS",
+		QuantumVulnerable: false,
+		Strength:          StrengthSafe,
+		Rationale:         "AES-256 in XTS mode (block-storage encryption, e.g. EBS). Grover only halves effective key strength (~128 bits remain), so it is quantum resistant; XTS provides confidentiality only (no integrity), distinct from the AES-256-GCM AEAD used by other at-rest services.",
+	},
+	"AES-256-CBC": {
+		Primitive:         "AES-256-CBC",
+		QuantumVulnerable: false,
+		Strength:          StrengthSafe,
+		Rationale:         "AES-256 in CBC mode. Grover only halves effective key strength (~128 bits remain), so it is quantum resistant; CBC is unauthenticated (padding-oracle-prone without a MAC) — a classical-hygiene concern, not a quantum one, and deliberately NOT reported as the AEAD AES-256-GCM.",
+	},
 	"AES-128": {
 		Primitive:         "AES-128",
 		QuantumVulnerable: false,
@@ -209,9 +221,14 @@ var primitiveAlias = map[string]string{
 	"rsa-4096":                "RSA-4096",
 	"rsa4096":                 "RSA-4096",
 	"rsa_4096":                "RSA-4096",
+	// x509 signature-algorithm OIDs name the HASH + RSA, never the modulus
+	// size: a 2048-bit cert is routinely signed with SHA-384/SHA-512. All three
+	// therefore resolve to the generic-RSA row (the bare "rsa" convention)
+	// rather than fabricating a 3072/4096-bit key the scanner never observed.
+	// Quantum verdict is unaffected (all RSA sizes are Shor-vulnerable).
 	"sha256withrsaencryption": "RSA-2048",
-	"sha384withrsaencryption": "RSA-3072",
-	"sha512withrsaencryption": "RSA-4096",
+	"sha384withrsaencryption": "RSA-2048",
+	"sha512withrsaencryption": "RSA-2048",
 
 	// ECDSA / EC curves
 	"ecdsa":             "ECDSA-P256",
@@ -263,8 +280,11 @@ var primitiveAlias = map[string]string{
 	"aes256":            "AES-256-GCM",
 	"aes-256-gcm":       "AES-256-GCM",
 	"aes256gcm":         "AES-256-GCM",
-	"aes-256-xts":       "AES-256-GCM",
-	"aes-256-cbc":       "AES-256-GCM",
+	// XTS/CBC are distinct modes from GCM (XTS: disk cipher, no integrity;
+	// CBC: unauthenticated) — do NOT alias them to the AEAD GCM row, or the
+	// CBOM would fabricate an authenticated-encryption mode it never observed.
+	"aes-256-xts":       "AES-256-XTS",
+	"aes-256-cbc":       "AES-256-CBC",
 	"symmetric_default": "AES-256-GCM",
 	"aes-128":           "AES-128",
 	"aes128":            "AES-128",

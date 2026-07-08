@@ -12,15 +12,20 @@ import (
 	"github.com/aws-samples/cryptamap/pkg/models"
 )
 
-// fakeRedshiftTransitClient is a hand-rolled redshiftDescribeClustersAPI for
-// unit-testing the scanner's pagination + error propagation without a live AWS
-// client. pages is returned page-by-page (each call consumes the next page) and
-// the Marker is wired so the scanner loops through every page; err forces a
-// DescribeClusters failure on the first call.
+// fakeRedshiftTransitClient is a hand-rolled redshiftTransitAPI for
+// unit-testing the scanner's pagination + error propagation + require_ssl
+// resolution without a live AWS client. pages is returned page-by-page (each
+// call consumes the next page) and the Marker is wired so the scanner loops
+// through every page; err forces a DescribeClusters failure on the first call.
+// paramsByGroup maps a cluster parameter-group name to its DescribeClusterParameters
+// output; paramsErr forces every DescribeClusterParameters call to fail.
 type fakeRedshiftTransitClient struct {
-	pages []*redshift.DescribeClustersOutput
-	calls int
-	err   error
+	pages         []*redshift.DescribeClustersOutput
+	calls         int
+	err           error
+	paramsByGroup map[string]*redshift.DescribeClusterParametersOutput
+	paramsErr     error
+	paramsCalls   int
 }
 
 func (f *fakeRedshiftTransitClient) DescribeClusters(ctx context.Context, in *redshift.DescribeClustersInput, optFns ...func(*redshift.Options)) (*redshift.DescribeClustersOutput, error) {
@@ -35,7 +40,41 @@ func (f *fakeRedshiftTransitClient) DescribeClusters(ctx context.Context, in *re
 	return out, nil
 }
 
+func (f *fakeRedshiftTransitClient) DescribeClusterParameters(ctx context.Context, in *redshift.DescribeClusterParametersInput, optFns ...func(*redshift.Options)) (*redshift.DescribeClusterParametersOutput, error) {
+	f.paramsCalls++
+	if f.paramsErr != nil {
+		return nil, f.paramsErr
+	}
+	if in.ParameterGroupName != nil {
+		if out, ok := f.paramsByGroup[*in.ParameterGroupName]; ok {
+			return out, nil
+		}
+	}
+	return &redshift.DescribeClusterParametersOutput{}, nil
+}
+
 func redshifttransitStrptr(s string) *string { return &s }
+
+// redshifttransitCluster builds a cluster attached to the named parameter group.
+func redshifttransitCluster(id, groupName string) redshifttypes.Cluster {
+	c := redshifttypes.Cluster{ClusterIdentifier: redshifttransitStrptr(id)}
+	if groupName != "" {
+		c.ClusterParameterGroups = []redshifttypes.ClusterParameterGroupStatus{
+			{ParameterGroupName: redshifttransitStrptr(groupName)},
+		}
+	}
+	return c
+}
+
+// redshifttransitRequireSSL builds a DescribeClusterParameters page whose
+// require_ssl parameter carries the given value.
+func redshifttransitRequireSSL(value string) *redshift.DescribeClusterParametersOutput {
+	return &redshift.DescribeClusterParametersOutput{
+		Parameters: []redshifttypes.Parameter{
+			{ParameterName: redshifttransitStrptr("require_ssl"), ParameterValue: redshifttransitStrptr(value)},
+		},
+	}
+}
 
 // redshifttransitAssetByID indexes the returned assets by ResourceID.
 func redshifttransitAssetByID(assets []models.CryptoAsset) map[string]models.CryptoAsset {
@@ -103,16 +142,26 @@ func TestRedshiftTransitScanErrorPropagates(t *testing.T) {
 	}
 }
 
-// TestRedshiftTransitScanHonestyPosture verifies the scanner's honesty posture
-// for the transit domain. Redshift always runs TLS-capable endpoints over an
-// always-encrypted classical channel: every cluster MUST be classified
-// non-pqc-classical and MUST NEVER be marked no-encryption. The scanner also
-// must NOT fabricate an observed TLS version — the version field stays blank
-// since no Redshift API returns the negotiated TLS version.
-func TestRedshiftTransitScanHonestyPosture(t *testing.T) {
+// TestRedshiftTransitRequireSSLTriState verifies the honesty tri-state derived
+// from the require_ssl cluster parameter (which DEFAULTS to false — a default
+// Redshift cluster accepts plaintext):
+//   - require_ssl=true  -> non-pqc-classical (TLS enforced), observed
+//   - require_ssl=false -> legacy-tls + note (TLS offered, plaintext accepted)
+//   - unreadable group  -> unknown + note (never a fabricated all-clear)
+//
+// The scanner must NEVER stamp a definite "always encrypted classical" posture
+// without reading require_ssl.
+func TestRedshiftTransitRequireSSLTriState(t *testing.T) {
 	client := &fakeRedshiftTransitClient{
 		pages: []*redshift.DescribeClustersOutput{
-			{Clusters: []redshifttypes.Cluster{{ClusterIdentifier: redshifttransitStrptr("plain-cluster")}}},
+			{Clusters: []redshifttypes.Cluster{
+				redshifttransitCluster("enforced-cluster", "pg-enforced"),
+				redshifttransitCluster("plaintext-cluster", "pg-default"),
+			}},
+		},
+		paramsByGroup: map[string]*redshift.DescribeClusterParametersOutput{
+			"pg-enforced": redshifttransitRequireSSL("true"),
+			"pg-default":  redshifttransitRequireSSL("false"),
 		},
 	}
 	resolver := newACMCertResolver(aws.Config{})
@@ -121,23 +170,130 @@ func TestRedshiftTransitScanHonestyPosture(t *testing.T) {
 		t.Fatalf("scan returned unexpected error: %v", err)
 	}
 	got := redshifttransitAssetByID(assets)
-	a, ok := got["plain-cluster"]
+
+	enf, ok := got["enforced-cluster"]
 	if !ok {
-		t.Fatalf("expected asset for plain-cluster; got=%v", keysOfRedshiftTransit(got))
+		t.Fatalf("expected asset for enforced-cluster; got=%v", keysOfRedshiftTransit(got))
 	}
-	if p := a.Properties["posture"]; p != string(models.PostureNonPQCClassical) {
-		t.Errorf("expected posture %q (always-encrypted classical transit), got %q", models.PostureNonPQCClassical, p)
+	if p := enf.Properties["posture"]; p != string(models.PostureNonPQCClassical) {
+		t.Errorf("require_ssl=true: expected posture %q (enforced classical TLS), got %q", models.PostureNonPQCClassical, p)
 	}
-	if p := a.Properties["posture"]; p == string(models.PostureNoEncryption) {
-		t.Errorf("redshift transit must NEVER be classified no-encryption; got %q", p)
+	if e := enf.Properties["sslEnforcement"]; e != string(sslEnforced) {
+		t.Errorf("require_ssl=true: expected sslEnforcement %q, got %q", sslEnforced, e)
 	}
-	if a.ResourceType != "AWS::Redshift::Cluster" {
-		t.Errorf("expected resourceType AWS::Redshift::Cluster, got %q", a.ResourceType)
+
+	pl, ok := got["plaintext-cluster"]
+	if !ok {
+		t.Fatalf("expected asset for plaintext-cluster; got=%v", keysOfRedshiftTransit(got))
 	}
-	// No fabricated TLS version: the scanner leaves the version blank because no
-	// Redshift API returns the negotiated TLS version.
-	if pp := a.CryptoProps.ProtocolProperties; pp != nil && pp.Version != "" {
-		t.Errorf("expected blank TLS version (not fabricated), got %q", pp.Version)
+	if p := pl.Properties["posture"]; p != string(models.PostureLegacyTLS) {
+		t.Errorf("require_ssl=false: expected posture %q (TLS offered but plaintext accepted — NOT a clean classical all-clear), got %q", models.PostureLegacyTLS, p)
+	}
+	if e := pl.Properties["sslEnforcement"]; e != string(sslNotEnforced) {
+		t.Errorf("require_ssl=false: expected sslEnforcement %q, got %q", sslNotEnforced, e)
+	}
+	if note := pl.Properties["note"]; note == "" {
+		t.Error("require_ssl=false: expected an explanatory note naming the unenforced require_ssl parameter, got none")
+	}
+}
+
+// TestRedshiftTransitUnknownWhenUnreadable verifies the honesty fallback: when
+// the cluster parameter group cannot be resolved (no group attached) or
+// DescribeClusterParameters fails (denied/throttled), the scanner must emit
+// PostureUnknown + a note naming what could not be read — NEVER a fabricated
+// non-pqc-classical all-clear. The scanner also must NOT fabricate an observed
+// TLS version — the version field stays blank since no Redshift API returns the
+// negotiated TLS version.
+func TestRedshiftTransitUnknownWhenUnreadable(t *testing.T) {
+	t.Run("no parameter group", func(t *testing.T) {
+		client := &fakeRedshiftTransitClient{
+			pages: []*redshift.DescribeClustersOutput{
+				{Clusters: []redshifttypes.Cluster{{ClusterIdentifier: redshifttransitStrptr("groupless-cluster")}}},
+			},
+		}
+		resolver := newACMCertResolver(aws.Config{})
+		assets, err := RedshiftTransitScanner{}.scan(context.Background(), client, resolver, "111122223333", "us-east-1")
+		if err != nil {
+			t.Fatalf("scan returned unexpected error: %v", err)
+		}
+		got := redshifttransitAssetByID(assets)
+		a, ok := got["groupless-cluster"]
+		if !ok {
+			t.Fatalf("expected asset for groupless-cluster; got=%v", keysOfRedshiftTransit(got))
+		}
+		if p := a.Properties["posture"]; p != string(models.PostureUnknown) {
+			t.Errorf("unresolvable require_ssl: expected posture %q (not a fabricated classical all-clear), got %q", models.PostureUnknown, p)
+		}
+		if note := a.Properties["note"]; note == "" {
+			t.Error("unresolvable require_ssl: expected a note naming what could not be read, got none")
+		}
+		if a.ResourceType != "AWS::Redshift::Cluster" {
+			t.Errorf("expected resourceType AWS::Redshift::Cluster, got %q", a.ResourceType)
+		}
+		// No fabricated TLS version: the scanner leaves the version blank because no
+		// Redshift API returns the negotiated TLS version.
+		if pp := a.CryptoProps.ProtocolProperties; pp != nil && pp.Version != "" {
+			t.Errorf("expected blank TLS version (not fabricated), got %q", pp.Version)
+		}
+	})
+
+	t.Run("DescribeClusterParameters denied", func(t *testing.T) {
+		client := &fakeRedshiftTransitClient{
+			pages: []*redshift.DescribeClustersOutput{
+				{Clusters: []redshifttypes.Cluster{redshifttransitCluster("denied-cluster", "pg-denied")}},
+			},
+			paramsErr: errors.New("AccessDeniedException: not authorized to perform redshift:DescribeClusterParameters"),
+		}
+		resolver := newACMCertResolver(aws.Config{})
+		assets, err := RedshiftTransitScanner{}.scan(context.Background(), client, resolver, "111122223333", "us-east-1")
+		if err != nil {
+			t.Fatalf("scan returned unexpected error: %v", err)
+		}
+		got := redshifttransitAssetByID(assets)
+		a, ok := got["denied-cluster"]
+		if !ok {
+			t.Fatalf("expected asset for denied-cluster; got=%v", keysOfRedshiftTransit(got))
+		}
+		if p := a.Properties["posture"]; p != string(models.PostureUnknown) {
+			t.Errorf("denied DescribeClusterParameters: expected posture %q, got %q", models.PostureUnknown, p)
+		}
+		if note := a.Properties["note"]; note == "" {
+			t.Error("denied DescribeClusterParameters: expected a note naming what could not be read, got none")
+		}
+	})
+}
+
+// TestRedshiftTransitParamGroupCached verifies that many clusters sharing one
+// parameter group cost a single DescribeClusterParameters call (memoised).
+func TestRedshiftTransitParamGroupCached(t *testing.T) {
+	client := &fakeRedshiftTransitClient{
+		pages: []*redshift.DescribeClustersOutput{
+			{Clusters: []redshifttypes.Cluster{
+				redshifttransitCluster("shared-a", "pg-shared"),
+				redshifttransitCluster("shared-b", "pg-shared"),
+			}},
+		},
+		paramsByGroup: map[string]*redshift.DescribeClusterParametersOutput{
+			"pg-shared": redshifttransitRequireSSL("true"),
+		},
+	}
+	resolver := newACMCertResolver(aws.Config{})
+	assets, err := RedshiftTransitScanner{}.scan(context.Background(), client, resolver, "111122223333", "us-east-1")
+	if err != nil {
+		t.Fatalf("scan returned unexpected error: %v", err)
+	}
+	if client.paramsCalls != 1 {
+		t.Errorf("expected 1 DescribeClusterParameters call for a shared group (memoised), got %d", client.paramsCalls)
+	}
+	got := redshifttransitAssetByID(assets)
+	for _, id := range []string{"shared-a", "shared-b"} {
+		a, ok := got[id]
+		if !ok {
+			t.Fatalf("expected asset for %s; got=%v", id, keysOfRedshiftTransit(got))
+		}
+		if p := a.Properties["posture"]; p != string(models.PostureNonPQCClassical) {
+			t.Errorf("%s: expected posture %q from the shared enforced group, got %q", id, models.PostureNonPQCClassical, p)
+		}
 	}
 }
 

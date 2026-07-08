@@ -164,3 +164,30 @@ func ossPostureOf(t *testing.T, a models.CryptoAsset) string {
 	}
 	return ""
 }
+
+// TestOSSScanSkipsIdentifierlessCollections verifies the nil-identifier guard: a
+// degenerate CollectionSummary with Name/Arn/Id all nil must be skipped, never
+// emitted as a malformed empty-ResourceID asset (whose synthetic ARN would
+// collide across such collections and be dedup-dropped downstream).
+func TestOSSScanSkipsIdentifierlessCollections(t *testing.T) {
+	client := &fakeOSSClient{
+		listPages: []*opensearchserverless.ListCollectionsOutput{
+			{
+				CollectionSummaries: []osstypes.CollectionSummary{
+					{}, // all-nil identifiers -> must be skipped
+					{Name: ossStrptr("coll-good"), Arn: ossStrptr("arn:aws:aoss:us-east-1:111122223333:collection/good")},
+				},
+			},
+		},
+	}
+	assets, err := OpenSearchServerlessScanner{}.scan(context.Background(), client, "111122223333", "us-east-1")
+	if err != nil {
+		t.Fatalf("scan returned unexpected error: %v", err)
+	}
+	if len(assets) != 1 {
+		t.Fatalf("expected exactly 1 asset (identifier-less summary skipped), got %d", len(assets))
+	}
+	if assets[0].ResourceID == "" {
+		t.Error("emitted asset has an empty ResourceID; identifier-less summaries must be skipped")
+	}
+}

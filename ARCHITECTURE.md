@@ -179,7 +179,8 @@ React 18 + Vite + **AWS Cloudscape** (`@cloudscape-design/components`,
 Tailwind and no ECharts; charts are Cloudscape. Pages: Overview, Assets (with the
 `AssetDetailPanel` rendering deep crypto detail), Roadmap (`RoadmapTable` +
 `RoadmapRollups`), and SEBI/RBI/IRDAI compliance tabs. `ExportButton` produces a
-regulator-grade PDF via `html2pdf.js`. The dashboard imports its wire types from
+human-readable PDF summary via `html2pdf.js`; the machine-readable CBOM (not the PDF)
+is the regulator deliverable. The dashboard imports its wire types from
 the generated `dashboard/src/types/generated.ts`.
 
 ## Org fan-out topology (deployed multi-account path)

@@ -23,6 +23,7 @@ func TestClassifyBedrockKeyTier(t *testing.T) {
 		name        string
 		cmkArn      string
 		getErr      bool
+		noCMKField  bool
 		defaultNote string
 		wantPosture models.CryptoPosture
 		wantKeyID   string
@@ -61,21 +62,40 @@ func TestClassifyBedrockKeyTier(t *testing.T) {
 			wantNote:    keyCustodyUnknownNote,
 		},
 		{
-			// Knowledge base: NO readable per-KB CMK field. Must use the KB-specific
-			// honesty note and never fabricate a CMK ARN, still SymmetricOnly.
-			name:        "knowledge base no-CMK-field uses KB note",
+			// Knowledge base: the SDK exposes NO per-KB CMK field (noCMKField). An
+			// empty CMK here is NOT an observed AWS-managed default (the downstream
+			// store may be CMK-encrypted), so custody MUST be honestly undetermined —
+			// keyTier=unknown, kmsKeyId=UNRESOLVED, never the aws-managed-default
+			// verdict and never a fabricated CMK ARN — with the KB-specific note.
+			// DISCRIMINATING: if the classifier reverts to the aws-managed-default
+			// verdict for a no-CMK-field input, wantKeyID/wantTier below fail.
+			name:        "knowledge base no-CMK-field yields honest unknown custody",
 			cmkArn:      "",
+			noCMKField:  true,
 			defaultNote: kbNoCMKFieldNote,
 			wantPosture: models.PostureSymmetricOnly,
-			wantKeyID:   awsOwnedKey,
-			wantTier:    "aws-managed-default",
+			wantKeyID:   "UNRESOLVED",
+			wantTier:    "unknown",
 			wantNote:    kbNoCMKFieldNote,
 		},
 		{
-			// A family-specific note must NOT override a real customer CMK: a present
-			// CMK is still customer-managed with the ARN and no default note attached.
-			name:        "customer CMK present ignores defaultNote",
+			// noCMKField with no explicit note falls back to the KB-specific note
+			// (not the shared aws-managed-default note), still UNRESOLVED/unknown.
+			name:        "no-CMK-field default note falls back to KB note",
+			cmkArn:      "",
+			noCMKField:  true,
+			wantPosture: models.PostureSymmetricOnly,
+			wantKeyID:   "UNRESOLVED",
+			wantTier:    "unknown",
+			wantNote:    kbNoCMKFieldNote,
+		},
+		{
+			// A family-specific note must NOT override a real customer CMK, even with
+			// noCMKField set: a present CMK is still customer-managed with the ARN and
+			// no default note attached.
+			name:        "customer CMK present ignores defaultNote and noCMKField",
 			cmkArn:      cmkARN,
+			noCMKField:  true,
 			defaultNote: kbNoCMKFieldNote,
 			wantPosture: models.PostureSymmetricOnly,
 			wantKeyID:   cmkARN,
@@ -86,7 +106,7 @@ func TestClassifyBedrockKeyTier(t *testing.T) {
 
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			gotPosture, props := classifyBedrockKeyTier(c.cmkArn, c.getErr, c.defaultNote)
+			gotPosture, props := classifyBedrockKeyTier(c.cmkArn, c.getErr, c.noCMKField, c.defaultNote)
 
 			// HONESTY: posture is ALWAYS SymmetricOnly, NEVER no-encryption.
 			if gotPosture != c.wantPosture {
@@ -131,16 +151,17 @@ func TestClassifyBedrockKeyTier(t *testing.T) {
 // stamps the SymmetricOnly posture and the key-tier evidence from the pure
 // classifier onto a real asset, so the helper truly is the single source of truth.
 func TestNewBedrockAsset_AssemblesClassification(t *testing.T) {
-	// AWS-managed default branch (no CMK).
-	a := newBedrockAsset("123456789012", "us-east-1", "kb-1", "AWS::Bedrock::KnowledgeBase", "", false, kbNoCMKFieldNote)
+	// Knowledge base (noCMKField) branch: honest UNRESOLVED/unknown custody, never
+	// the fabricated aws-managed-default verdict, KB-specific note retained.
+	a := newBedrockAsset("123456789012", "us-east-1", "kb-1", "AWS::Bedrock::KnowledgeBase", "", false, true, kbNoCMKFieldNote)
 	if a.Properties["posture"] != string(models.PostureSymmetricOnly) {
 		t.Errorf("posture property = %q, want %q", a.Properties["posture"], models.PostureSymmetricOnly)
 	}
-	if a.Properties["kmsKeyId"] != awsOwnedKey {
-		t.Errorf("kmsKeyId = %q, want %q", a.Properties["kmsKeyId"], awsOwnedKey)
+	if a.Properties["kmsKeyId"] != "UNRESOLVED" {
+		t.Errorf("kmsKeyId = %q, want UNRESOLVED (no-CMK-field custody undetermined, never aws-managed-default)", a.Properties["kmsKeyId"])
 	}
-	if a.Properties["keyTier"] != "aws-managed-default" {
-		t.Errorf("keyTier = %q, want aws-managed-default", a.Properties["keyTier"])
+	if a.Properties["keyTier"] != "unknown" {
+		t.Errorf("keyTier = %q, want unknown", a.Properties["keyTier"])
 	}
 	if a.Properties["note"] != kbNoCMKFieldNote {
 		t.Errorf("note = %q, want KB note", a.Properties["note"])
@@ -149,9 +170,23 @@ func TestNewBedrockAsset_AssemblesClassification(t *testing.T) {
 		t.Errorf("at-rest algorithm = %+v, want AES-256", a.CryptoProps.AlgorithmProperties)
 	}
 
+	// AWS-managed default branch: no CMK, not a no-CMK-field family (e.g. a custom
+	// model whose GetCustomModel succeeded with no ModelKmsKeyArn) -> observed
+	// AWS-owned default with the shared custody note.
+	d := newBedrockAsset("123456789012", "us-east-1", "model-0", "AWS::Bedrock::CustomModel", "", false, false, "")
+	if d.Properties["kmsKeyId"] != awsOwnedKey {
+		t.Errorf("kmsKeyId = %q, want %q (observed AWS-managed default)", d.Properties["kmsKeyId"], awsOwnedKey)
+	}
+	if d.Properties["keyTier"] != "aws-managed-default" {
+		t.Errorf("keyTier = %q, want aws-managed-default", d.Properties["keyTier"])
+	}
+	if d.Properties["note"] != awsManagedDefaultNote {
+		t.Errorf("note = %q, want shared aws-managed-default note", d.Properties["note"])
+	}
+
 	// Customer-managed branch (real CMK ARN).
 	const cmkARN = "arn:aws:kms:us-east-1:123456789012:key/abcd"
-	b := newBedrockAsset("123456789012", "us-east-1", "model-1", "AWS::Bedrock::CustomModel", cmkARN, false, "")
+	b := newBedrockAsset("123456789012", "us-east-1", "model-1", "AWS::Bedrock::CustomModel", cmkARN, false, false, "")
 	if b.Properties["kmsKeyId"] != cmkARN {
 		t.Errorf("kmsKeyId = %q, want %q", b.Properties["kmsKeyId"], cmkARN)
 	}

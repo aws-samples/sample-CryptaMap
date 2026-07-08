@@ -1,10 +1,13 @@
 package datarest
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"testing"
 
+	"github.com/aws/aws-sdk-go-v2/service/kms"
+	kmstypes "github.com/aws/aws-sdk-go-v2/service/kms/types"
 	"github.com/aws/smithy-go"
 )
 
@@ -70,6 +73,51 @@ func TestIsNoSSERuleError(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			if got := isNoSSERuleError(c.err); got != c.want {
 				t.Errorf("isNoSSERuleError(%v) = %v, want %v", c.err, got, c.want)
+			}
+		})
+	}
+}
+
+// fakeS3KMSDescribe is a minimal s3KMSAPI fake for exercising s3PropsForSSE.
+type fakeS3KMSDescribe struct {
+	spec string
+	err  error
+}
+
+func (f *fakeS3KMSDescribe) DescribeKey(ctx context.Context, in *kms.DescribeKeyInput, optFns ...func(*kms.Options)) (*kms.DescribeKeyOutput, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	return &kms.DescribeKeyOutput{KeyMetadata: &kmstypes.KeyMetadata{KeySpec: kmstypes.KeySpec(f.spec)}}, nil
+}
+
+// TestS3PropsForSSEKeySpecHonesty pins the SSE-KMS key-spec evidence rules:
+//   - an observed DescribeKey spec is recorded verbatim;
+//   - NO configured key (AWS-managed aws/s3) records the documented
+//     SYMMETRIC_DEFAULT;
+//   - a configured key whose DescribeKey FAILS must NOT fabricate an "observed"
+//     SYMMETRIC_DEFAULT — the spec stays unresolved (empty, property omitted)
+//     while the AES posture stands on the bucket's own SSE configuration.
+func TestS3PropsForSSEKeySpecHonesty(t *testing.T) {
+	cases := []struct {
+		name     string
+		kmsKeyID string
+		client   *fakeS3KMSDescribe
+		wantSpec string
+	}{
+		{"observed-spec", "arn:aws:kms:us-east-1:111122223333:key/abc", &fakeS3KMSDescribe{spec: "RSA_2048"}, "RSA_2048"},
+		{"aws-managed-no-key-configured", "", &fakeS3KMSDescribe{}, "SYMMETRIC_DEFAULT"},
+		{"describe-denied-not-fabricated", "arn:aws:kms:us-east-1:111122223333:key/abc", &fakeS3KMSDescribe{err: errors.New("AccessDeniedException: kms:DescribeKey")}, ""},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			keySpec := "sentinel-unset"
+			cp := s3PropsForSSE(context.Background(), c.client, "aws:kms", c.kmsKeyID, &keySpec)
+			if keySpec != c.wantSpec {
+				t.Errorf("outKeySpec = %q, want %q", keySpec, c.wantSpec)
+			}
+			if cp.AlgorithmProperties == nil {
+				t.Fatal("expected AES at-rest algorithm properties for SSE-KMS")
 			}
 		})
 	}

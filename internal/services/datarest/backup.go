@@ -181,6 +181,9 @@ func (s BackupScanner) scan(ctx context.Context, client backupAPI, kmsClient kms
 				a.Properties["note"] = "Backup vault is encrypted with a KMS key given as a key-id ARN that could not be resolved via kms:DescribeKey (e.g. access denied / cross-account); custody undetermined."
 			}
 			assets = append(assets, a)
+			if services.TruncationCapReached(len(assets), s.Name(), region) {
+				return assets, nil
+			}
 		}
 		if out.NextToken == nil || *out.NextToken == "" {
 			break

@@ -202,4 +202,10 @@ func TestCloudfrontKeyGroupsUnparsablePEMNotSafe(t *testing.T) {
 	if a.CryptoProps.AlgorithmProperties == nil || a.CryptoProps.AlgorithmProperties.KeySizeBits != 0 {
 		t.Errorf("expected key size 0 for unparsable PEM (honest unknown), got %+v", a.CryptoProps.AlgorithmProperties)
 	}
+	// Provenance honesty: the classical posture rests on the CloudFront
+	// RSA/ECDSA-only platform constraint, NOT on a per-key observation — the
+	// parse FAILED, so an observed/high stamp would fabricate provenance.
+	if got := a.Properties["source"]; got == "observed" {
+		t.Errorf("unparsable key must not carry an observed provenance stamp (the observation failed), got source=%q", got)
+	}
 }

@@ -65,6 +65,28 @@ if [[ -n "${GOOS:-}" && -n "${GOARCH:-}" ]]; then
   echo "[release] single-target build requested via environment: ${GOOS}/${GOARCH}"
 fi
 
+# ---------------------------------------------------------------------------
+# Embedded-dashboard preflight: the binary embeds cmd/cryptamap/webdist via
+# go:embed. If the staged index.html references hashed /assets/ bundles that are
+# NOT present in the staged tree (e.g. a stale copy of a real build's index.html
+# whose gitignored assets are absent on a clean checkout), the released binary
+# would serve a blank page — silently. Fail the release instead. The committed
+# placeholder index.html references no /assets/ and passes; a real staging from
+# `make build-serve` carries its assets alongside and passes too.
+# ---------------------------------------------------------------------------
+WEBDIST="${REPO_ROOT}/cmd/cryptamap/webdist"
+if [[ -f "${WEBDIST}/index.html" ]]; then
+  while IFS= read -r asset; do
+    [[ -z "${asset}" ]] && continue
+    if [[ ! -f "${WEBDIST}${asset}" ]]; then
+      echo "[release] ERROR: ${WEBDIST}/index.html references ${asset}, which is missing from the embed staging." >&2
+      echo "[release]        The released binary would serve a broken (blank) dashboard." >&2
+      echo "[release]        Run 'make build-serve' first to stage the real dashboard, or restore the committed placeholder index.html." >&2
+      exit 1
+    fi
+  done < <(grep -oE '/assets/[^"]+' "${WEBDIST}/index.html" || true)
+fi
+
 mkdir -p "${RELEASE_DIR}"
 echo "[release] version label : ${VERSION}"
 echo "[release] ldflags        : ${LDFLAGS}"

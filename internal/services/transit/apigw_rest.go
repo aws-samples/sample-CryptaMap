@@ -3,7 +3,6 @@ package transit
 import (
 	"context"
 	"fmt"
-	"os"
 	"strings"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -54,12 +53,25 @@ func secPolicyToVersion(p string) (string, models.CryptoPosture) {
 		return "1.2", models.PostureNonPQCClassical
 	case "TLS_1_3":
 		return "1.3", models.PostureNonPQCClassical
+	// Documented non-PQ enhanced/edge policies with explicit floors per the AWS
+	// supported-security-policies table:
+	// https://docs.aws.amazon.com/apigateway/latest/developerguide/apigateway-security-policies-list.html
+	case "SECURITYPOLICY_TLS13_2025_EDGE": // TLS 1.3-only edge policy.
+		return "1.3", models.PostureNonPQCClassical
+	case "SECURITYPOLICY_TLS12_PFS_2025_EDGE", // accepts TLS 1.2 and 1.3 -> floor 1.2.
+		"SECURITYPOLICY_TLS12_2018_EDGE",
+		"SECURITYPOLICY_TLS13_1_2_2021_06":
+		return "1.2", models.PostureNonPQCClassical
 	}
-	// Non-PQ TLS13_1_3 / EDGE 1.3-only policies have a true 1.3 floor.
+	// Non-PQ TLS13_1_3 regional policies (e.g. ..._2025_09, ..._FIPS_2025_09) are
+	// TLS 1.3-only per the docs -> true 1.3 floor.
 	if strings.Contains(up, "TLS13_1_3") {
 		return "1.3", models.PostureNonPQCClassical
 	}
-	return "1.2", models.PostureNonPQCClassical
+	// Unrecognized / future policy name: the API exposes only the policy NAME, so
+	// there is no data to prove a floor. Do NOT fabricate a "1.2" classical
+	// verdict — report Unknown (mirrors alb.go policyVersion's fallback).
+	return "", models.PostureUnknown
 }
 
 // apigwRestAPI is the minimal slice of the apigateway client this scanner uses.
@@ -124,8 +136,11 @@ func (s APIGWRestScanner) scan(ctx context.Context, client apigwRestAPI, certRes
 	for {
 		out, err := client.GetDomainNames(ctx, &apigw.GetDomainNamesInput{Position: domPos})
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "apigw_rest GetDomainNames: %v\n", err)
-			break
+			// Do NOT swallow a denied/throttled GetDomainNames — propagate it so the
+			// engine records this scanner as errored and the scan is VISIBLY
+			// incomplete rather than a clean-looking success missing every custom
+			// domain (mirrors apigw_http's GetDomainNames handling).
+			return nil, fmt.Errorf("apigw_rest GetDomainNames: %w", err)
 		}
 		for _, d := range out.Items {
 			if d.DomainName == nil {
@@ -151,6 +166,9 @@ func (s APIGWRestScanner) scan(ctx context.Context, client apigwRestAPI, certRes
 			}
 			a := services.NewAsset("apigw_rest", models.CategoryDataInTransit, accountID, region, *d.DomainName, "AWS::ApiGateway::DomainName", props)
 			services.PostureProperty(&a, posture)
+			if posture == models.PostureUnknown {
+				a.Properties["note"] = fmt.Sprintf("API Gateway custom-domain SecurityPolicy %q is not a recognized policy name; the API exposes only the policy name (not its protocols/ciphers), so the TLS floor and posture could not be determined.", secPolicy)
+			}
 			// Capture the bound ACM certificate ARN (edge or regional) so the cert's
 			// signature algorithm + key size can be resolved via ACM. resolveACMCert
 			// fills CertSignatureAlgorithm/CertKeySizeBits when the ARN is an ACM cert.

@@ -2,6 +2,15 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
+    <!-- Defense-in-depth CSP. The load-bearing policy is the HTTP header set by
+         cryptamap serve (cmd/cryptamap/serve.go); frame-ancestors is intentionally
+         omitted here because it is ignored in a <meta> CSP (only the header form
+         blocks framing). style-src 'unsafe-inline' + img/font data: are required by
+         the Cloudscape/Vite bundle. -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'none'"
+    />
     <link rel="icon" type="image/svg+xml" href="/cryptamap.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>CryptaMap — Cryptographic Asset Compliance Dashboard</title>

@@ -3,7 +3,6 @@ package certmgmt
 import (
 	"context"
 	"fmt"
-	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/rolesanywhere"
@@ -115,9 +114,11 @@ func (s RolesAnywhereScanner) scan(ctx context.Context, client rolesAnywhereAPI,
 			// posture.
 			parsed := parseCertPEM(pemBody)
 
-			// Subject/issuer/validity are not exposed by ListTrustAnchors, so they
-			// stay empty rather than being invented.
-			props := services.CertProps(name, "", parsed.SigAlgo, time.Time{}, time.Time{})
+			// Subject/issuer are not exposed by ListTrustAnchors, so they stay
+			// empty rather than being invented. Validity comes from the parsed
+			// bundle PEM when present (zero for non-bundle anchors / parse
+			// failure — never fabricated).
+			props := services.CertProps(name, "", parsed.SigAlgo, parsed.NotBefore, parsed.NotAfter)
 			if parsed.AlgoProps != nil {
 				props.AlgorithmProperties = parsed.AlgoProps
 			}

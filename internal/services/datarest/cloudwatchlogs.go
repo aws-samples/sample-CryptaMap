@@ -75,6 +75,12 @@ func (s CloudWatchLogsScanner) scan(ctx context.Context, client cwLogsAPI, accou
 			services.StampDocFactKeyed(&a, "datarest/cloudwatchlogs/at-rest-aes256")
 			a.Properties["kmsKeyId"] = kmsKey
 			assets = append(assets, a)
+			// Log groups are the one datarest resource that realistically reaches
+			// 6 figures per account (every Lambda auto-creates one); cap loudly to
+			// protect the shard's memory/time budget instead of growing unbounded.
+			if services.TruncationCapReached(len(assets), s.Name(), region) {
+				return assets, nil
+			}
 		}
 		if out.NextToken == nil || *out.NextToken == "" {
 			break

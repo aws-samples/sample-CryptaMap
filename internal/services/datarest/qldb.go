@@ -10,6 +10,7 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/qldb"
+	qldbtypes "github.com/aws/aws-sdk-go-v2/service/qldb/types"
 
 	"github.com/aws-samples/cryptamap/internal/services"
 	"github.com/aws-samples/cryptamap/pkg/models"
@@ -26,7 +27,10 @@ func isEndpointUnavailable(err error) bool {
 	}
 	var dnsErr *net.DNSError
 	if errors.As(err, &dnsErr) {
-		return true
+		// Only a definitive "host not found" is the retired-endpoint signal.
+		// Transient resolver failures (timeouts, temporary errors) must NOT be
+		// downgraded to a clean empty success — they still surface as errors.
+		return dnsErr.IsNotFound
 	}
 	return strings.Contains(err.Error(), "no such host")
 }
@@ -97,18 +101,48 @@ func (s QLDBScanner) scan(ctx context.Context, client qldbAPI, accountID, region
 			}
 			name := *l.Name
 			desc, derr := client.DescribeLedger(ctx, &qldb.DescribeLedgerInput{Name: l.Name})
+			// Key custody is only asserted from an observed DescribeLedger response.
+			// A Describe failure must NOT be collapsed into the AWS-owned-key verdict:
+			// the ledger may in fact use a customer CMK we simply could not read, so
+			// the custody is recorded as UNDETERMINED with a note instead.
 			kmsKey := "AWS_OWNED_KMS_KEY"
+			note := ""
+			encStatus := ""
+			keyAccessible := true
 			if derr != nil {
 				fmt.Fprintf(os.Stderr, "qldb:%s DescribeLedger: %v\n", name, derr)
-			} else if desc.EncryptionDescription != nil &&
-				desc.EncryptionDescription.KmsKeyArn != nil &&
-				*desc.EncryptionDescription.KmsKeyArn != "" {
-				kmsKey = *desc.EncryptionDescription.KmsKeyArn
+				kmsKey = "UNDETERMINED"
+				note = "DescribeLedger failed; the KMS key custody could not be read (the ledger may use a customer managed key). Posture remains SymmetricOnly per the always-encrypted AWS-doc guarantee."
+			} else if desc.EncryptionDescription != nil {
+				encStatus = string(desc.EncryptionDescription.EncryptionStatus)
+				if desc.EncryptionDescription.KmsKeyArn != nil &&
+					*desc.EncryptionDescription.KmsKeyArn != "" {
+					kmsKey = *desc.EncryptionDescription.KmsKeyArn
+				}
+				// EncryptionStatus==KMS_KEY_INACCESSIBLE means the ledger's customer CMK
+				// is currently unreachable (disabled/revoked), so the ledger is impaired
+				// and rejects reads/writes. Posture stays SymmetricOnly (data on disk is
+				// still AES-256 under the CMK), but this is NOT a clean all-clear: flag
+				// keyAccessible=false with an operational-health honesty note so the CMK
+				// ARN is not read as a healthy custody signal.
+				if desc.EncryptionDescription.EncryptionStatus == qldbtypes.EncryptionStatusKmsKeyInaccessible {
+					keyAccessible = false
+					note = "EncryptionStatus=KMS_KEY_INACCESSIBLE: the ledger's KMS key is currently inaccessible (disabled or revoked) and the ledger is impaired (rejecting reads/writes). Data remains AES-256-encrypted at rest under the recorded key, so posture stays SymmetricOnly, but this is not a clean all-clear."
+				}
 			}
 			a := services.NewAsset("qldb", models.CategoryDataAtRest, accountID, region, name, "AWS::QLDB::Ledger", services.AESAtRest())
 			services.PostureProperty(&a, models.PostureSymmetricOnly)
 			services.StampDocFactKeyed(&a, "datarest/qldb/at-rest-aes256")
 			a.Properties["kmsKeyId"] = kmsKey
+			if encStatus != "" {
+				a.Properties["encryptionStatus"] = encStatus
+			}
+			if !keyAccessible {
+				a.Properties["keyAccessible"] = "false"
+			}
+			if note != "" {
+				a.Properties["note"] = note
+			}
 			assets = append(assets, a)
 		}
 		if out.NextToken == nil || *out.NextToken == "" {

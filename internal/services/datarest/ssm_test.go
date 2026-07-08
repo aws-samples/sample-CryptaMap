@@ -8,6 +8,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/ssm"
 	ssmtypes "github.com/aws/aws-sdk-go-v2/service/ssm/types"
 
+	"github.com/aws-samples/cryptamap/internal/services"
 	"github.com/aws-samples/cryptamap/pkg/models"
 )
 
@@ -154,4 +155,45 @@ func TestSSMScanPostureHonesty(t *testing.T) {
 	if got := byID["secure-cmk"].Properties["kmsKeyId"]; got != "arn:aws:kms:us-east-1:111122223333:key/abc-123" {
 		t.Errorf("secure-cmk: expected customer KMS key ARN recorded, got %q", got)
 	}
+}
+
+// TestSSMScanTruncationCapIsLoudNotUnbounded verifies the per-scanner asset cap:
+// a pathological parameter-dense account must stop accumulating at
+// services.MaxAssetsPerScanner (bounded shard memory/time) instead of growing
+// unbounded — and the truncation is surfaced via the standard LOUD warning
+// rather than silently.
+func TestSSMScanTruncationCapIsLoudNotUnbounded(t *testing.T) {
+	page := &ssm.DescribeParametersOutput{NextToken: ssmstrptr("again")}
+	for i := 0; i < 1000; i++ {
+		name := "param-" + string(rune('a'+i%26)) + ssmItoa(i)
+		page.Parameters = append(page.Parameters, ssmtypes.ParameterMetadata{Name: &name})
+	}
+	// An "infinite" fake: always returns the same full page with a NextToken.
+	client := &ssmInfiniteFake{page: page}
+	assets, err := SSMScanner{}.scan(context.Background(), client, "111122223333", "us-east-1")
+	if err != nil {
+		t.Fatalf("scan returned unexpected error: %v", err)
+	}
+	if len(assets) != services.MaxAssetsPerScanner {
+		t.Errorf("expected the scan to stop at MaxAssetsPerScanner=%d assets, got %d", services.MaxAssetsPerScanner, len(assets))
+	}
+}
+
+type ssmInfiniteFake struct{ page *ssm.DescribeParametersOutput }
+
+func (f *ssmInfiniteFake) DescribeParameters(ctx context.Context, in *ssm.DescribeParametersInput, optFns ...func(*ssm.Options)) (*ssm.DescribeParametersOutput, error) {
+	return f.page, nil
+}
+
+// ssmItoa is a tiny int-to-string helper to keep names unique without strconv.
+func ssmItoa(i int) string {
+	if i == 0 {
+		return "0"
+	}
+	s := ""
+	for i > 0 {
+		s = string(rune('0'+i%10)) + s
+		i /= 10
+	}
+	return s
 }

@@ -202,10 +202,12 @@ func describeGroupSSLEnforcement(ctx context.Context, client rdsTransitAPI, name
 				val = strings.ToLower(strings.TrimSpace(*p.ParameterValue))
 			}
 			if val == "" {
-				// Parameter exposed but unset: enforcement not configured.
-				if result == sslUnknown {
-					result = sslNotEnforced
-				}
+				// Parameter exposed but unset. The engine default is NOT
+				// universally off (rds.force_ssl defaults to ON for RDS
+				// PostgreSQL 15+), and the API materializes engine defaults as
+				// concrete "0"/"1" values in practice — an empty value means the
+				// effective state was not readable, so keep it unknown rather
+				// than fabricating a not-enforced alarm.
 				continue
 			}
 			if val == "1" || val == "on" || val == "true" {

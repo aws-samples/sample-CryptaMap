@@ -1,5 +1,6 @@
 {
   "_comment": "MOCKUP/DESIGN data. Quoted from the public IRDAI 2026 ICSG (Annexure-III audit checklist) document (see source link), re-verified 2026-06-12. CORRECTION vs prior belief: the PQC item is REAL in the 2026 revision (it was absent in 2023). It is an AUDIT-CHECKLIST item (auditors will ask it), numbered row 110 sequentially — NOT a regulator-branded code 'Control 110'. The PQC wording lives ONLY in the Annexure-III checklist, not the 175-page guideline body.",
+  "draft": true,
   "framework": "IRDAI",
   "title": "IRDAI Information & Cybersecurity Guidelines, 2026 — Cryptographic-Asset Inventory",
   "asOf": "2026-06-12",

@@ -36,7 +36,7 @@ type iamCertsAPI interface {
 // Scan lists IAM server certificates and parses each cert PEM for its real
 // signature/public-key algorithm; posture follows the parse result (classical
 // when confirmed, Unknown otherwise) rather than assuming all IAM certs are RSA.
-// Pagination via Marker/IsTruncated; capped at 1000 items.
+// Pagination via Marker/IsTruncated; capped loudly at services.MaxAssetsPerScanner.
 func (s IAMCertsScanner) Scan(ctx context.Context, cfg aws.Config) ([]models.CryptoAsset, error) {
 	client := iam.NewFromConfig(cfg)
 	accountID := services.AccountID(ctx, cfg)
@@ -51,7 +51,6 @@ func (s IAMCertsScanner) Scan(ctx context.Context, cfg aws.Config) ([]models.Cry
 // incomplete rather than a clean-looking empty success.
 func (s IAMCertsScanner) scan(ctx context.Context, client iamCertsAPI, accountID, region string) ([]models.CryptoAsset, error) {
 	assets := []models.CryptoAsset{}
-	const maxItems = 1000
 	var marker *string
 	for {
 		out, err := client.ListServerCertificates(ctx, &iam.ListServerCertificatesInput{Marker: marker})
@@ -112,7 +111,9 @@ func (s IAMCertsScanner) scan(ctx context.Context, client iamCertsAPI, accountID
 				services.PostureProperty(&a, models.PostureUnknown)
 			}
 			assets = append(assets, a)
-			if len(assets) >= maxItems {
+			// Loud shared cap: silent truncation = under-reported crypto
+			// assets = a false all-clear (see services/common.go).
+			if services.TruncationCapReached(len(assets), s.Name(), region) {
 				return assets, nil
 			}
 		}

@@ -89,6 +89,9 @@ func (s DocumentDBScanner) scan(ctx context.Context, client docdbDescribeCluster
 				}
 			}
 			assets = append(assets, a)
+			if services.TruncationCapReached(len(assets), s.Name(), region) {
+				return assets, nil
+			}
 		}
 		if out.Marker == nil || *out.Marker == "" {
 			break

@@ -190,8 +190,10 @@ func TestTransitClassifiers_AdversarialInputs(t *testing.T) {
 		for _, policy := range []string{"", "Policy-Future-TLS-9-9", big, "garbage", "Policy-Min-TLS-1-2-PFS-2023-10"} {
 			policy := policy
 			runClassify(t, "classifyOpenSearchTLSPolicy/"+truncate(policy), func() models.CryptoProperties {
-				ver, _, _ := classifyOpenSearchTLSPolicy(policy)
-				return services.TLSProtocolProps(ver, policy)
+				// maxVer may be "" for an unknown policy; TLSProtocolProps must
+				// still emit a schema-valid block (empty version drops via omitempty).
+				_, maxVer, _, _ := classifyOpenSearchTLSPolicy(policy)
+				return services.TLSProtocolProps(maxVer, policy)
 			})
 		}
 	})

@@ -88,6 +88,37 @@ func classifyTransferPolicy(kexs, ciphers, macs, tlsCiphers []string) models.Cry
 	}
 }
 
+// classifyTransferProtocols inspects a Transfer Family server's enabled file
+// transfer protocols (DescribedServer.Protocols: SFTP, FTPS, FTP, AS2) for
+// plaintext FTP. Per the transfer SDK doc, FTP is "Unencrypted file transfer" —
+// so a server offering FTP must NEVER be stamped with the clean posture derived
+// from its SSH/TLS security policy (the policy governs only the encrypted
+// protocols; FTP traffic bypasses it entirely). Mirrors MSK's TLS_PLAINTEXT
+// handling:
+//   - FTP is the ONLY protocol  -> ftpOnly:  the server is plaintext-only.
+//   - FTP alongside others      -> ftpMixed: encryption offered but not enforced.
+//   - No FTP, or an empty list (field unreadable) -> no override; an absent
+//     Protocols field must not fabricate an alarm.
+func classifyTransferProtocols(protocols []string) (ftpOnly, ftpMixed bool, note string) {
+	ftp := false
+	other := false
+	for _, p := range protocols {
+		if strings.EqualFold(strings.TrimSpace(p), "FTP") {
+			ftp = true
+		} else if strings.TrimSpace(p) != "" {
+			other = true
+		}
+	}
+	switch {
+	case ftp && !other:
+		return true, false, "Transfer Family server enables only the FTP protocol, which is unencrypted per AWS; the server's security policy governs only encrypted protocols, so transit traffic is not encrypted."
+	case ftp && other:
+		return false, true, "Transfer Family server enables plaintext FTP alongside encrypted protocols; clients may connect unencrypted, so the security-policy-derived TLS/SSH posture is not enforced for all transit traffic."
+	default:
+		return false, false, ""
+	}
+}
+
 // classifyVPNTunnel maps the negotiated IPsec/IKE algorithms of a Site-to-Site
 // VPN tunnel into ProtocolProperties{Type:"ipsec"}. Encryption and integrity
 // algorithms (phase 1 + phase 2) become cipher suites, the IKE versions become
@@ -118,6 +149,17 @@ func classifyVPNTunnel(phase1Enc, phase2Enc, phase1Integ, phase2Integ []string, 
 	}
 	if len(dhGroups) > 0 {
 		pp.KeyExchangeGroup = fmt.Sprintf("DH-group-%d", dhGroups[0])
+		// Record ALL permitted DH groups, not only the first: a tunnel that
+		// permits a weak group (e.g. DH group 2, 1024-bit MODP) alongside a
+		// strong one must not have the weak group vanish from the CBOM.
+		groups := make([]string, 0, len(dhGroups))
+		for _, g := range dhGroups {
+			groups = append(groups, fmt.Sprintf("DH-group-%d", g))
+		}
+		pp.CipherSuites = append(pp.CipherSuites, models.CipherSuite{
+			Name:       "ipsec-dh-groups",
+			Algorithms: dedupeStrings(groups),
+		})
 	}
 
 	return models.CryptoProperties{
@@ -140,7 +182,7 @@ func classifyVPNTunnel(phase1Enc, phase2Enc, phase1Integ, phase2Integ []string, 
 // into Properties["transitEncryptionEnforced"] and the raw clientBroker value
 // into Properties["clientBroker"].
 func classifyMSKTransit(clientBroker string, inCluster *bool) (ver, suite string, posture models.CryptoPosture, props models.CryptoProperties, inClusterStr, enforced string) {
-	ver = "1.2"
+	ver = ""
 	suite = "AWS-managed"
 	posture = models.PostureNonPQCClassical
 	enforced = "true"
@@ -163,6 +205,17 @@ func classifyMSKTransit(clientBroker string, inCluster *bool) (ver, suite string
 		// TLS-only — plaintext refused.
 		posture = models.PostureNonPQCClassical
 		enforced = "true"
+	default:
+		// Empty (field absent / API pathology) or an enum value this classifier
+		// does not recognize: nothing was proven, so do NOT keep the pre-set
+		// "enforced classical TLS 1.2" defaults — that would fabricate a
+		// doc-fact-stamped enforcement all-clear for an unread value. Mirror
+		// classifyIoTSecurityPolicy: return Unknown and leave enforced empty so
+		// the caller skips the doc-fact stamp.
+		ver = ""
+		suite = "unknown"
+		posture = models.PostureUnknown
+		enforced = ""
 	}
 
 	if inCluster != nil {
@@ -191,25 +244,37 @@ func classifyMSKTransit(clientBroker string, inCluster *bool) (ver, suite string
 }
 
 // classifyOpenSearchTLSPolicy maps an OpenSearch domain's TLSSecurityPolicy
-// enum value to a TLS version and posture. It matches the REAL enum constants
-// (correcting the previous bogus "1-2-pq" substring match, which matched no
-// real policy). None of the real OpenSearch TLS policies are post-quantum, so
-// pqcHybrid is never set true.
-func classifyOpenSearchTLSPolicy(policy string) (ver string, posture models.CryptoPosture, pqcHybrid bool) {
+// enum value to the TLS negotiation FLOOR (minVer, the policy's documented
+// minimum) and CEILING (maxVer, the highest version it permits) plus a posture.
+// It matches the REAL enum constants (correcting the previous bogus "1-2-pq"
+// substring match, which matched no real policy). Floor and ceiling are
+// returned SEPARATELY so a floor-1.2 policy that merely permits up to 1.3
+// (Policy-Min-TLS-1-2-PFS-2023-10) is never reported with TLSMinVersion=1.3 —
+// that fabrication made a "floor>=1.3" compliance check falsely pass. None of
+// the real OpenSearch TLS policies are post-quantum, so pqcHybrid is never set
+// true. An empty or unrecognized policy returns ("", "", PostureUnknown) so a
+// guessed "1.2 classical" default never masquerades as observed.
+func classifyOpenSearchTLSPolicy(policy string) (minVer, maxVer string, posture models.CryptoPosture, pqcHybrid bool) {
 	switch policy {
 	case "Policy-Min-TLS-1-0-2019-07":
-		return "1.0", models.PostureLegacyTLS, false
+		// Supports TLS 1.0 through 1.2 (per the opensearch SDK enum doc).
+		return "1.0", "1.2", models.PostureLegacyTLS, false
 	case "Policy-Min-TLS-1-2-2019-07":
-		return "1.2", models.PostureNonPQCClassical, false
+		// Supports ONLY TLS 1.2.
+		return "1.2", "1.2", models.PostureNonPQCClassical, false
 	case "Policy-Min-TLS-1-2-PFS-2023-10":
-		// TLS 1.2 up to 1.3 with perfect forward secrecy — classical PFS, not PQ.
-		return "1.3", models.PostureNonPQCClassical, false
+		// Floor 1.2, permits up to 1.3, perfect-forward-secrecy suites —
+		// classical PFS, not PQ. The FLOOR is 1.2 (the name says Min-TLS-1-2).
+		return "1.2", "1.3", models.PostureNonPQCClassical, false
 	case "Policy-Min-TLS-1-2-RFC9151-FIPS-2024-08":
-		// TLS 1.3 + FIPS — classical, not PQ.
-		return "1.3", models.PostureNonPQCClassical, false
+		// Floor 1.2 (per the Min-TLS-1-2 name), permits up to 1.3, FIPS/CNSA
+		// suites — classical, not PQ.
+		return "1.2", "1.3", models.PostureNonPQCClassical, false
 	default:
-		// Empty or unrecognized policy: conservative classical default.
-		return "1.2", models.PostureNonPQCClassical, false
+		// Empty or unrecognized policy: the TLS floor cannot be proven from the
+		// enum value actually read, so nothing is fabricated (mirrors
+		// classifyIoTSecurityPolicy's unknown handling).
+		return "", "", models.PostureUnknown, false
 	}
 }
 
@@ -317,9 +382,12 @@ func classifyDBSSLEnforcement(params map[string]string) dbSSLEnforcement {
 			continue
 		}
 		if strings.TrimSpace(value) == "" {
-			// Toggle present but unset (engine default). RDS defaults both
-			// toggles to off, so an unset value is a real not-enforced state.
-			result = dbSSLNotEnforced
+			// Toggle present but unset (engine default). The engine default is
+			// NOT universally off — RDS for PostgreSQL 15+ defaults rds.force_ssl
+			// to ON — and in practice the API materializes engine defaults as
+			// concrete values ("0"/"1"), so an empty value here means we could
+			// not read the effective state. Report unknown rather than
+			// fabricating a not-enforced alarm.
 			continue
 		}
 		switch strings.ToLower(strings.TrimSpace(value)) {

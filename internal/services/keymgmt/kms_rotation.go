@@ -4,10 +4,10 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/kms"
+	kmstypes "github.com/aws/aws-sdk-go-v2/service/kms/types"
 
 	"github.com/aws-samples/cryptamap/internal/services"
 	"github.com/aws-samples/cryptamap/pkg/models"
@@ -82,10 +82,17 @@ func (s KMSRotationScanner) scan(ctx context.Context, client kmsRotationAPI, acc
 			origin := ""
 			customKeyStore := false
 			size := 0
+			// observed tracks whether DescribeKey actually returned metadata: the
+			// observed/high provenance stamp below must never be applied to a key
+			// whose metadata read failed (that would fabricate provenance).
+			observed := false
+			var keyState kmstypes.KeyState
 			d, derr := client.DescribeKey(ctx, &kms.DescribeKeyInput{KeyId: k.KeyId})
 			if derr != nil {
 				fmt.Fprintf(os.Stderr, "kms DescribeKey %s: %v\n", id, derr)
 			} else if d.KeyMetadata != nil {
+				observed = true
+				keyState = d.KeyMetadata.KeyState
 				if d.KeyMetadata.MultiRegion != nil {
 					multiRegion = *d.KeyMetadata.MultiRegion
 				}
@@ -106,25 +113,27 @@ func (s KMSRotationScanner) scan(ctx context.Context, client kmsRotationAPI, acc
 			// never report enabled, so emitting rotationEnabled=false there conflates
 			// "inapplicable" with "off". Only call GetKeyRotationStatus when applicable.
 			rotationApplicable := keySpec == "SYMMETRIC_DEFAULT" && origin == "AWS_KMS" && !customKeyStore
-			rotationEnabled := false
+			// rotationEnabled is a tri-state string: "true"/"false" only when
+			// GetKeyRotationStatus actually answered; "unknown" when the read failed
+			// (denied/throttled). Defaulting a failed read to "false" would fabricate
+			// a definite "rotation is OFF" compliance verdict for a key whose rotation
+			// status was never observed.
+			rotationEnabled := "unknown"
 			rotationPeriodDays := ""
 			nextRotationDate := ""
 			onDemandStart := ""
-			var nextRotation *time.Time
 			if rotationApplicable {
 				rotation, rerr := client.GetKeyRotationStatus(ctx, &kms.GetKeyRotationStatusInput{KeyId: k.KeyId})
 				if rerr != nil {
 					fmt.Fprintf(os.Stderr, "kms GetKeyRotationStatus %s: %v\n", id, rerr)
 				} else {
-					rotationEnabled = rotation.KeyRotationEnabled
+					rotationEnabled = fmt.Sprintf("%t", rotation.KeyRotationEnabled)
 					// Additive fields from the SAME GetKeyRotationStatus call.
 					if rotation.RotationPeriodInDays != nil {
 						rotationPeriodDays = fmt.Sprintf("%d", *rotation.RotationPeriodInDays)
 					}
 					if rotation.NextRotationDate != nil {
 						nextRotationDate = rotation.NextRotationDate.UTC().Format("2006-01-02")
-						t := *rotation.NextRotationDate
-						nextRotation = &t
 					}
 					if rotation.OnDemandRotationStartDate != nil {
 						onDemandStart = rotation.OnDemandRotationStartDate.UTC().Format("2006-01-02")
@@ -133,12 +142,14 @@ func (s KMSRotationScanner) scan(ctx context.Context, client kmsRotationAPI, acc
 			}
 
 			// Material type reflects the real key usage+spec (asymmetric -> private-key,
-			// symmetric/HMAC -> secret-key) instead of a flat 'secret-key'.
-			props := services.KeyMaterialProps(kmsMaterialType(keyUsage, keySpec), models.StateActive, size, keySpec)
-			// NextRotationDate fills the otherwise-DASH 'Updated' field.
-			if rcm := props.RelatedCryptoMaterialProperties; rcm != nil && nextRotation != nil {
-				rcm.UpdateDate = *nextRotation
-			}
+			// symmetric/HMAC -> secret-key) instead of a flat 'secret-key'. State comes
+			// from the observed KeyState (mirrors kms_spec's kmsCryptoState fix) instead
+			// of a hard-coded StateActive that made disabled/pending-deletion keys look
+			// live; an unobserved key maps to StateUnknown. NextRotationDate is NOT
+			// written into RelatedCryptoMaterialProperties.UpdateDate: CycloneDX
+			// `update` means when the material was last updated, and a future scheduled
+			// rotation date is not that — it rides as the flat nextRotationDate prop.
+			props := services.KeyMaterialProps(kmsMaterialType(keyUsage, keySpec), kmsCryptoState(keyState), size, keySpec)
 
 			a := services.NewAsset("kms_rotation", models.CategoryKeyManagement, accountID, region, id, "AWS::KMS::Key", props)
 			a.Properties["multiRegion"] = fmt.Sprintf("%t", multiRegion)
@@ -151,7 +162,7 @@ func (s KMSRotationScanner) scan(ctx context.Context, client kmsRotationAPI, acc
 			}
 			if rotationApplicable {
 				a.Properties["rotationApplicable"] = "true"
-				a.Properties["rotationEnabled"] = fmt.Sprintf("%t", rotationEnabled)
+				a.Properties["rotationEnabled"] = rotationEnabled
 				if rotationPeriodDays != "" {
 					a.Properties["rotationPeriodDays"] = rotationPeriodDays
 				}
@@ -174,8 +185,14 @@ func (s KMSRotationScanner) scan(ctx context.Context, client kmsRotationAPI, acc
 			// PostureSymmetricOnly false-safed every asymmetric customer-managed key as
 			// quantum-resistant.
 			services.PostureProperty(&a, kmsSpecPosture(keySpec))
-			// Posture is driven by a live DescribeKey observation.
-			services.StampObserved(&a, "high")
+			// Posture is driven by a live DescribeKey observation — so the
+			// observed/high provenance stamp applies ONLY when DescribeKey actually
+			// returned metadata. When the read failed, keySpec is a placeholder and
+			// posture Unknown; stamping observed/high there would fabricate the
+			// audit trail this CBOM's provenance feature exists to keep honest.
+			if observed {
+				services.StampObserved(&a, "high")
+			}
 			// The rotation-inapplicability sub-claim rests on a universal AWS-doc
 			// guarantee; cite it (url + date only) without clobbering the observed
 			// source set just above. Sourced from the loaded knowledge by key.

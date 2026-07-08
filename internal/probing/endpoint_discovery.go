@@ -19,26 +19,31 @@ type VPCEndpoint struct {
 // DiscoverVPCEndpoints enumerates VPC interface endpoints in a region.
 func DiscoverVPCEndpoints(ctx context.Context, cfg aws.Config) ([]VPCEndpoint, error) {
 	c := ec2.NewFromConfig(cfg)
-	out, err := c.DescribeVpcEndpoints(ctx, &ec2.DescribeVpcEndpointsInput{})
-	if err != nil {
-		return nil, fmt.Errorf("DescribeVpcEndpoints: %w", err)
-	}
-	endpoints := make([]VPCEndpoint, 0, len(out.VpcEndpoints))
-	for _, e := range out.VpcEndpoints {
-		ve := VPCEndpoint{}
-		if e.VpcEndpointId != nil {
-			ve.ID = *e.VpcEndpointId
+	var endpoints []VPCEndpoint
+	// Paginate: a single unpaginated call silently truncates at the API page
+	// size in accounts with many endpoints.
+	p := ec2.NewDescribeVpcEndpointsPaginator(c, &ec2.DescribeVpcEndpointsInput{})
+	for p.HasMorePages() {
+		out, err := p.NextPage(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("DescribeVpcEndpoints: %w", err)
 		}
-		if e.ServiceName != nil {
-			ve.ServiceName = *e.ServiceName
-		}
-		ve.State = string(e.State)
-		for _, d := range e.DnsEntries {
-			if d.DnsName != nil {
-				ve.DNSNames = append(ve.DNSNames, *d.DnsName)
+		for _, e := range out.VpcEndpoints {
+			ve := VPCEndpoint{}
+			if e.VpcEndpointId != nil {
+				ve.ID = *e.VpcEndpointId
 			}
+			if e.ServiceName != nil {
+				ve.ServiceName = *e.ServiceName
+			}
+			ve.State = string(e.State)
+			for _, d := range e.DnsEntries {
+				if d.DnsName != nil {
+					ve.DNSNames = append(ve.DNSNames, *d.DnsName)
+				}
+			}
+			endpoints = append(endpoints, ve)
 		}
-		endpoints = append(endpoints, ve)
 	}
 	return endpoints, nil
 }

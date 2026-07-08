@@ -110,10 +110,6 @@ func (s KendraScanner) scan(ctx context.Context, client kendraAPI, accountID, re
 				id := *sum.Id
 
 				desc, derr := client.DescribeIndex(ctx, &kendra.DescribeIndexInput{Id: &id})
-				if derr != nil {
-					fmt.Fprintf(os.Stderr, "kendra:%s DescribeIndex: %v\n", id, derr)
-					return models.CryptoAsset{}, false
-				}
 
 				// Kendra always encrypts at rest with AES-256 (universal AWS-doc
 				// guarantee, no disable toggle), so posture is unconditionally
@@ -121,6 +117,18 @@ func (s KendraScanner) scan(ctx context.Context, client kendraAPI, accountID, re
 				a := services.NewAsset("kendra", models.CategoryDataAtRest, accountID, region, id, "AWS::Kendra::Index", services.AESAtRest())
 				services.PostureProperty(&a, models.PostureSymmetricOnly)
 				services.StampDocFact(&a, "high", "https://docs.aws.amazon.com/kendra/latest/dg/encryption-at-rest.html", "2026-06-15")
+
+				if derr != nil {
+					// Do NOT drop the index: posture does not depend on DescribeIndex
+					// (always-encrypted doc-fact), only the key tier does. Emit the
+					// asset with custody honestly undetermined instead of vanishing it
+					// from the CBOM (all-clear by omission).
+					fmt.Fprintf(os.Stderr, "kendra:%s DescribeIndex: %v\n", id, derr)
+					a.Properties["kmsKeyId"] = "UNRESOLVED"
+					a.Properties["keyTier"] = "unknown"
+					a.Properties["note"] = "DescribeIndex failed; the index is still AES-256 encrypted at rest (Kendra doc-fact), but the key tier (AWS-owned vs customer/managed CMK) could not be read."
+					return a, true
+				}
 
 				// Key tier: a populated KmsKeyId is a customer/AWS-managed CMK; its
 				// absence is the AWS-owned default key (still AES-256, but no customer

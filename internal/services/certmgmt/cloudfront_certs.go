@@ -32,7 +32,7 @@ type cloudfrontCertsAPI interface {
 }
 
 // Scan lists CloudFront distributions and emits one asset per distribution that has a viewer certificate.
-// Pagination via Marker; capped at 1000 items.
+// Pagination via Marker; capped loudly at services.MaxAssetsPerScanner.
 func (s CloudFrontCertsScanner) Scan(ctx context.Context, cfg aws.Config) ([]models.CryptoAsset, error) {
 	client := cloudfront.NewFromConfig(cfg)
 	accountID := services.AccountID(ctx, cfg)

@@ -13,6 +13,7 @@ import (
 	"github.com/santhosh-tekuri/jsonschema/v5"
 
 	"github.com/aws-samples/cryptamap/internal/merge"
+	"github.com/aws-samples/cryptamap/internal/services"
 	"github.com/aws-samples/cryptamap/pkg/models"
 )
 
@@ -418,5 +419,51 @@ func sampleScan(t *testing.T) models.ScanResult {
 				},
 			},
 		},
+	}
+}
+
+// TestScanIncompletenessMetadata verifies that single-scan incompleteness is
+// machine-readable on the CBOM: a truncation sentinel in a scanner's
+// ServiceScanReport.Errors stamps cryptamap:truncated/truncatedServices, a real
+// scanner error stamps cryptamap:scanErrors/erroredServices, and a clean scan
+// emits none of the four properties (byte-identical clean CBOMs).
+func TestScanIncompletenessMetadata(t *testing.T) {
+	getProp := func(bom CDXBOM, name string) (string, bool) {
+		for _, p := range bom.Metadata.Properties {
+			if p.Name == name {
+				return p.Value, true
+			}
+		}
+		return "", false
+	}
+
+	// Clean scan: none of the incompleteness props appear.
+	clean := sampleScan(t)
+	bom := buildCBOM(clean)
+	for _, name := range []string{"cryptamap:truncated", "cryptamap:truncatedServices", "cryptamap:scanErrors", "cryptamap:erroredServices"} {
+		if v, ok := getProp(bom, name); ok {
+			t.Errorf("clean scan: unexpected metadata property %s=%q", name, v)
+		}
+	}
+
+	// Truncated + errored scan.
+	scan := sampleScan(t)
+	scan.ServiceStats = []models.ServiceScanReport{
+		{Service: "s3", Errors: []string{services.TruncationSentinel + ": s3 results truncated at cap in region us-east-1; CBOM under-reports this service"}},
+		{Service: "kms", Errors: []string{"AccessDenied: not authorized"}},
+		{Service: "acm"}, // clean scanner
+	}
+	bom = buildCBOM(scan)
+	if v, _ := getProp(bom, "cryptamap:truncated"); v != "true" {
+		t.Errorf("cryptamap:truncated = %q, want \"true\"", v)
+	}
+	if v, _ := getProp(bom, "cryptamap:truncatedServices"); v != "s3" {
+		t.Errorf("cryptamap:truncatedServices = %q, want \"s3\"", v)
+	}
+	if v, _ := getProp(bom, "cryptamap:scanErrors"); v != "1" {
+		t.Errorf("cryptamap:scanErrors = %q, want \"1\"", v)
+	}
+	if v, _ := getProp(bom, "cryptamap:erroredServices"); v != "kms" {
+		t.Errorf("cryptamap:erroredServices = %q, want \"kms\"", v)
 	}
 }

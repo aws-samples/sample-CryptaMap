@@ -11,6 +11,8 @@
 package compliance
 
 import (
+	"log"
+
 	"github.com/aws-samples/cryptamap/pkg/models"
 )
 
@@ -26,6 +28,14 @@ const (
 	CANADA  = "CANADA_PQC"
 	EUROPOL = "EUROPOL_QSFF"
 )
+
+// KnownFrameworkIDs returns the canonical list of the 9 default framework IDs,
+// in registry order. It is the single source of truth for these IDs; other
+// packages (e.g. config defaults) reference this rather than re-listing the
+// string literals.
+func KnownFrameworkIDs() []string {
+	return []string{SEBI, RBI, IRDAI, CISA, MITRE, CNSA, NIS2, CANADA, EUROPOL}
+}
 
 // Mapper produces ComplianceMapping entries for one (asset, posture) pair.
 type Mapper interface {
@@ -62,9 +72,32 @@ func NewRegistry(enabled []string) *Registry {
 	for _, m := range all {
 		if want[m.ID()] {
 			out = append(out, m)
+			delete(want, m.ID())
 		}
 	}
+	// A config typo (e.g. "SEBI-CSCRF" for "SEBI_CSCRF") must not silently drop
+	// a regulator from all output — for a compliance-evidence tool that failure
+	// mode surfaces only at audit time. Warn loudly for every unmatched ID.
+	for _, id := range UnknownFrameworkIDs(enabled) {
+		log.Printf("compliance: unknown framework ID %q in config — no such mapper; it will be IGNORED (valid IDs: %v)", id, KnownFrameworkIDs())
+	}
 	return &Registry{mappers: out}
+}
+
+// UnknownFrameworkIDs returns the entries of enabled that match no known
+// framework ID (the silently-dropped-regulator hazard).
+func UnknownFrameworkIDs(enabled []string) []string {
+	known := map[string]bool{}
+	for _, id := range KnownFrameworkIDs() {
+		known[id] = true
+	}
+	var unknown []string
+	for _, e := range enabled {
+		if !known[e] {
+			unknown = append(unknown, e)
+		}
+	}
+	return unknown
 }
 
 // MapAll returns all framework mappings for an asset.
@@ -78,10 +111,13 @@ func (r *Registry) MapAll(asset models.CryptoAsset, posture models.CryptoPosture
 
 // statusFromPosture is the default compliance-status mapping for a posture. Use
 // this ONLY for frameworks that publish an actual cryptographic/PQC obligation an
-// asset can be "compliant" WITH (CISA M-23-02, NSA CNSA 2.0, EU NIS2/DORA, CCCS,
-// Europol QSFF). For the Indian regulators (RBI/SEBI/IRDAI), which have NO PQC
-// mandate today, use readinessFromPosture instead — asserting "compliant" there
-// over-claims regulatory compliance with an obligation that does not yet exist.
+// asset can be "compliant" WITH (OMB M-23-02, NSA CNSA 2.0, EU NIS2/DORA). For
+// frameworks with NO binding obligation on the scanned entity — the Indian
+// regulators (RBI/SEBI/IRDAI, no PQC mandate today), Europol QSFF (voluntary
+// forum recommendations), and the CCCS roadmap (Government of Canada scope) —
+// use readinessFromPosture instead: asserting "compliant"/"non-compliant" there
+// over-claims regulatory compliance with an obligation that does not exist or
+// does not apply.
 func statusFromPosture(p models.CryptoPosture) string {
 	switch p {
 	case models.PostureNoEncryption, models.PostureLegacyTLS:

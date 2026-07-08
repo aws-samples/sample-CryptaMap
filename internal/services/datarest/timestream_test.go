@@ -7,9 +7,57 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/service/timestreamwrite"
 	tstypes "github.com/aws/aws-sdk-go-v2/service/timestreamwrite/types"
+	"github.com/aws/smithy-go"
 
 	"github.com/aws-samples/cryptamap/pkg/models"
 )
+
+// TestIsTimestreamNotSubscribed pins the graceful-skip predicate to the TYPED
+// AccessDeniedException carrying the exact documented "Only existing Timestream"
+// message. Anything looser (substring matches on the flattened error text) would
+// also swallow GENUINE IAM/SCP denials for real Timestream customers — silently
+// converting their inventory into a clean empty success.
+func TestIsTimestreamNotSubscribed(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"nil", nil, false},
+		{
+			"typed-not-subscribed",
+			&smithy.GenericAPIError{Code: "AccessDeniedException", Message: "Only existing Timestream for LiveAnalytics customers can use this operation"},
+			true,
+		},
+		{
+			// A GENUINE SCP/IAM deny that happens to mention both "AccessDenied" and
+			// "LiveAnalytics" must NOT be treated as not-subscribed (real customer,
+			// real permission failure -> must stay a hard error).
+			"genuine-scp-deny-mentioning-liveanalytics",
+			&smithy.GenericAPIError{Code: "AccessDeniedException", Message: "User arn:aws:iam::111122223333:role/scan is not authorized to perform timestream:ListDatabases on Timestream for LiveAnalytics with an explicit deny in an SCP"},
+			false,
+		},
+		{
+			// Untyped error text embedding the phrase must not skip either: only the
+			// typed API error is trusted.
+			"untyped-string-only",
+			errors.New("AccessDeniedException: Only existing Timestream customers can use this operation"),
+			false,
+		},
+		{
+			"other-code-with-phrase",
+			&smithy.GenericAPIError{Code: "ValidationException", Message: "Only existing Timestream customers can use this operation"},
+			false,
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := isTimestreamNotSubscribed(c.err); got != c.want {
+				t.Errorf("isTimestreamNotSubscribed(%v) = %v, want %v", c.err, got, c.want)
+			}
+		})
+	}
+}
 
 // fakeTimestreamClient is a hand-rolled timestreamWriteAPI for unit-testing the
 // scanner's pagination + error propagation without a live AWS client. pages is
@@ -95,7 +143,7 @@ func TestTimestreamScanListErrorPropagates(t *testing.T) {
 // Timestream-for-LiveAnalytics customer) must yield zero assets and nil error,
 // NOT a hard error that flags the whole (account,region) shard as errored.
 func TestTimestreamScanNotSubscribedSkips(t *testing.T) {
-	notSub := errors.New("AccessDeniedException: Only existing Timestream for LiveAnalytics customers can use this operation")
+	notSub := &smithy.GenericAPIError{Code: "AccessDeniedException", Message: "Only existing Timestream for LiveAnalytics customers can use this operation"}
 	client := &fakeTimestreamClient{err: notSub}
 	assets, err := TimestreamScanner{}.scan(context.Background(), client, "111122223333", "us-east-1")
 	if err != nil {

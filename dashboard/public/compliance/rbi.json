@@ -1,5 +1,6 @@
 {
   "_comment": "MOCKUP/DESIGN data. Quotes taken from the public RBI documents (see each source link), re-verified 2026-06-12. RBI is the HONEST TWO-LAYER case: a binding generic crypto rule today + a forward-looking study committee. There is NO binding RBI post-quantum mandate yet — this page must not imply one.",
+  "draft": true,
   "framework": "RBI",
   "title": "RBI — Cryptographic Controls (binding today) & Quantum Readiness (Q-SAFE, forward-looking)",
   "asOf": "2026-06-12",

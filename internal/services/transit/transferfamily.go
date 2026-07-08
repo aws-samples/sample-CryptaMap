@@ -55,7 +55,12 @@ func postureFromTransferPolicyName(policy string) (models.CryptoPosture, string)
 		strings.Contains(pl, "2022-03"), strings.Contains(pl, "2023-05"):
 		return models.PostureNonPQCClassical, "1.2"
 	default:
-		return models.PostureUnknown, "1.2"
+		// Unplaceable policy name: posture is Unknown and NO concrete TLS version
+		// is asserted (empty). Returning "1.2" here would stamp
+		// ProtocolProperties.Version="1.2" onto an Unknown-posture asset — a
+		// fabricated version the scanner never read. Empty version leaves the field
+		// honestly unasserted (see TLSProtocolProps / the caller adds a note).
+		return models.PostureUnknown, ""
 	}
 }
 
@@ -109,12 +114,23 @@ func (s TransferFamilyScanner) scan(ctx context.Context, client transferAPI, acc
 			policy := ""
 			// Default to Unknown, not classical: a server whose policy we cannot place
 			// must not be asserted non-PQ (the current 2025 PQ policies carry no "pq"
-			// in the name, so a classical default was a false-safe).
+			// in the name, so a classical default was a false-safe). ver stays EMPTY
+			// on the Unknown path — we must not stamp a concrete TLS Version we never
+			// read (a DescribeServer error, or an unplaceable policy name, leaves the
+			// version genuinely unknown, not "1.2").
 			posture := models.PostureUnknown
-			ver := "1.2"
-			if derr == nil && d.Server != nil && d.Server.SecurityPolicyName != nil {
-				policy = *d.Server.SecurityPolicyName
-				posture, ver = postureFromTransferPolicyName(policy)
+			ver := ""
+			// The server's enabled file transfer protocols (SFTP/FTPS/FTP/AS2),
+			// read from the SAME DescribeServer response — no extra API call.
+			var protocols []string
+			if derr == nil && d.Server != nil {
+				if d.Server.SecurityPolicyName != nil {
+					policy = *d.Server.SecurityPolicyName
+					posture, ver = postureFromTransferPolicyName(policy)
+				}
+				for _, p := range d.Server.Protocols {
+					protocols = append(protocols, string(p))
+				}
 			} else if derr != nil {
 				fmt.Fprintf(os.Stderr, "transferfamily DescribeServer %s: %v\n", *srv.ServerId, derr)
 			}
@@ -151,6 +167,32 @@ func (s TransferFamilyScanner) scan(ctx context.Context, client transferAPI, acc
 				}
 			}
 
+			// Plaintext-FTP override: the security policy governs only the
+			// encrypted protocols (SFTP/FTPS), so a server that enables FTP must
+			// NOT carry the clean policy-derived posture (it could stamp
+			// NonPQCClassical or even PQCHybrid on unencrypted traffic). Mirrors
+			// MSK's TLS_PLAINTEXT handling: FTP-only is no-encryption; FTP mixed
+			// with encrypted protocols is a not-fully-enforced legacy-tls verdict.
+			ftpOnly, ftpMixed, ftpNote := classifyTransferProtocols(protocols)
+			enforced := ""
+			if ftpOnly {
+				posture = models.PostureNoEncryption
+				props = services.NoEncryption()
+				enforced = "false"
+			} else if ftpMixed {
+				posture = models.PostureLegacyTLS
+				enforced = "false"
+				// The policy-derived props may carry PQCHybrid=true (ML-KEM KEXs on
+				// the SFTP/FTPS side), but this server ALSO accepts plaintext FTP, so
+				// the connection is not uniformly PQ-protected. Clear the PQCHybrid
+				// flag so a downstream consumer keying on the flag (rather than the
+				// LegacyTLS posture) cannot count a plaintext-accepting server as
+				// post-quantum. The ML-KEM detail remains discoverable via the policy.
+				if props.ProtocolProperties != nil {
+					props.ProtocolProperties.PQCHybrid = false
+				}
+			}
+
 			a := services.NewAsset("transferfamily", models.CategoryDataInTransit, accountID, region, *srv.ServerId, "AWS::Transfer::Server", props)
 			services.PostureProperty(&a, posture)
 			if policy != "" {
@@ -158,6 +200,22 @@ func (s TransferFamilyScanner) scan(ctx context.Context, client transferAPI, acc
 			}
 			if fipsStr != "" {
 				a.Properties["fips"] = fipsStr
+			}
+			if len(protocols) > 0 {
+				a.Properties["protocols"] = strings.Join(protocols, ",")
+			}
+			if enforced != "" {
+				a.Properties["transitEncryptionEnforced"] = enforced
+			}
+			if ftpNote != "" {
+				a.Properties["note"] = ftpNote
+			} else if posture == models.PostureUnknown {
+				// Honest Unknown+note contract: say WHY the posture is undetermined
+				// (DescribeServer failed, or the security policy name could not be
+				// placed and DescribeSecurityPolicy did not classify it), so an
+				// unreadable server is never a silent blank rather than a fabricated
+				// verdict.
+				a.Properties["note"] = "transit posture undetermined: security policy could not be read or placed; no TLS version asserted"
 			}
 			assets = append(assets, a)
 		}

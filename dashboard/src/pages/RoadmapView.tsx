@@ -38,13 +38,16 @@ function ProportionBar({
   if (total === 0) return null;
   const segments: Array<{ count: number; color: string; title: string }> = [
     { count: actNow, color: '#d91515', title: `${actNow} need action now` },
-    { count: planWatch, color: '#0972d3', title: `${planWatch} no fix available yet` },
+    // "needs planned work", NOT "no fix available": plan-watch also holds items
+    // whose PQC fix EXISTS but is high-effort, and unencrypted assets whose fix
+    // (enable encryption) is available today (see posture.ts roadmapTier).
+    { count: planWatch, color: '#0972d3', title: `${planWatch} need planned work` },
     { count: noAction, color: '#037f0c', title: `${noAction} already quantum-resistant` },
   ];
   return (
     <div
       role="img"
-      aria-label={`${actNow} need action now, ${planWatch} no fix yet, ${noAction} already quantum-resistant`}
+      aria-label={`${actNow} need action now, ${planWatch} need planned work, ${noAction} already quantum-resistant`}
       style={{
         display: 'flex',
         width: '100%',
@@ -168,7 +171,7 @@ export default function RoadmapView() {
             <Box variant="p">
               Of {total} assets: <strong>{actNow.length}</strong> need action now ·{' '}
               <strong>{noAction.length}</strong> already quantum-resistant ·{' '}
-              <strong>{planWatch.length}</strong> have no fix available yet.
+              <strong>{planWatch.length}</strong> need planned work (no low-effort fix today).
             </Box>
             <ProportionBar
               actNow={actNow.length}
@@ -181,7 +184,7 @@ export default function RoadmapView() {
                 { label: 'Total assets', value: String(total) },
                 { label: 'Act now', value: String(actNow.length) },
                 { label: 'Already quantum-resistant', value: String(noAction.length) },
-                { label: 'No fix yet', value: String(planWatch.length) },
+                { label: 'Plan / Watch', value: String(planWatch.length) },
               ]}
             />
           </SpaceBetween>
@@ -217,7 +220,7 @@ export default function RoadmapView() {
         <ExpandableSection
           variant="container"
           defaultExpanded={false}
-          headerText="Plan / Watch — no fix available yet"
+          headerText="Plan / Watch — needs planned work"
           headerCounter={`(${planWatch.length})`}
           headerDescription="No PQC mechanism is published yet, or PQC exists but needs an application/SDK change or AWS-managed rollout. Track these; no one-flip action exists today."
         >
@@ -240,7 +243,7 @@ export default function RoadmapView() {
           defaultExpanded={false}
           headerText="Already quantum-resistant — no action needed"
           headerCounter={`(${noAction.length})`}
-          headerDescription="AES-256 symmetric encryption at rest is already quantum-resistant — there is no asymmetric exposure to migrate, so no PQC action is required."
+          headerDescription="Symmetric encryption at rest is already quantum-resistant — there is no asymmetric exposure to migrate, so no PQC action is required."
         >
           <RoadmapTable
             items={noAction}

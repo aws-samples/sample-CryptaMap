@@ -67,10 +67,20 @@ func retentionDaysFromEnv() int {
 	return n
 }
 
+// scanSortKey builds the item SK. It carries the scan id after the timestamp:
+// CompletedAt has only second granularity, so two scans of the same
+// (account, region) tuple completing within the same second (retry, concurrent
+// invocation, replayed event) would otherwise share an SK and PutItem — an
+// unconditional overwrite — would silently drop the losing scan record. The
+// timestamp stays first so SK range ordering remains chronological.
+func scanSortKey(scan models.ScanResult) string {
+	return fmt.Sprintf("SCAN#%s#%s", scan.CompletedAt.UTC().Format(time.RFC3339), scan.ScanID)
+}
+
 // PutScan writes a scan record. Findings are gzipped+base64 to keep item size down.
 func (w *DynamoWriter) PutScan(ctx context.Context, scan models.ScanResult, cbomS3Key string) error {
 	pk := fmt.Sprintf("ACCOUNT#%s#REGION#%s", scan.AccountID, scan.Region)
-	sk := fmt.Sprintf("SCAN#%s", scan.CompletedAt.UTC().Format(time.RFC3339))
+	sk := scanSortKey(scan)
 
 	findingsJSON, err := json.Marshal(scan.Findings)
 	if err != nil {
@@ -115,8 +125,9 @@ func (w *DynamoWriter) PutScan(ctx context.Context, scan models.ScanResult, cbom
 	}
 	// Store the inline findings blob only when it fits comfortably under the 400KB
 	// item ceiling; otherwise omit it (full findings remain in S3 via cbomRef) so a
-	// dense shard does not fail the entire PutItem. The reader treats a missing
-	// findings attribute as "fetch from S3".
+	// dense shard does not fail the entire PutItem. No in-repo reader consumes this
+	// attribute today (the merge Lambda reads shards from S3); any future reader
+	// must treat a missing findings attribute as "fetch from S3".
 	if len(encoded) <= maxInlineFindingsBytes {
 		item["findings"] = &ddbtypes.AttributeValueMemberS{Value: encoded}
 	} else {

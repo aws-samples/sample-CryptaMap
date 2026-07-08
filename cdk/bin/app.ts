@@ -14,13 +14,39 @@ const env: cdk.Environment = {
   region: process.env.CDK_DEFAULT_REGION,
 };
 
+// CLI context coercers: `cdk synth -c key=value` always delivers STRINGS, and a
+// bare `as boolean`/`as number` cast is compile-time only. Without these,
+// `-c orgScanningEnabled=false` was truthy (fail-OPEN: an operator explicitly
+// disabling org scanning would deploy the full org fan-out) and documented
+// numeric overrides like `-c retentionScans=90` failed synth deep inside
+// construct validation. Normalize once here; reject anything ambiguous loudly.
+function asBool(name: string, v: unknown, def: boolean): boolean {
+  if (v === undefined || v === null) return def;
+  if (typeof v === 'boolean') return v;
+  if (v === 'true') return true;
+  if (v === 'false') return false;
+  throw new Error(`Context '${name}' must be true or false, got '${String(v)}'`);
+}
+function asNum(name: string, v: unknown, def: number): number {
+  if (v === undefined || v === null) return def;
+  const n = typeof v === 'number' ? v : Number(v);
+  if (!Number.isFinite(n)) {
+    throw new Error(`Context '${name}' must be a number, got '${String(v)}'`);
+  }
+  return n;
+}
+
 const prefix = (app.node.tryGetContext('stackPrefix') as string) ?? 'CryptaMap';
-const orgScanning = (app.node.tryGetContext('orgScanningEnabled') as boolean) ?? false;
+const orgScanning = asBool('orgScanningEnabled', app.node.tryGetContext('orgScanningEnabled'), false);
 const alertEmail = (app.node.tryGetContext('alertEmail') as string) ?? '';
+// Escape hatch for the org-alerting guard below: `-c allowSilentAlerts=true`
+// lets a demo/eval synth proceed with a subscriber-less SNS topic. Defaults to
+// false so real org deploys are forced to wire a notification target.
+const allowSilentAlerts = asBool('allowSilentAlerts', app.node.tryGetContext('allowSilentAlerts'), false);
 // Cost guardrail: a monthly AWS Budget (region-agnostic) so a runaway / misconfigured
 // scan can't silently run up cost. Notifies the same alert email at the configured
 // thresholds. Override with `-c monthlyBudgetUSD=<amount>`; 0 disables the budget.
-const monthlyBudgetUSD = (app.node.tryGetContext('monthlyBudgetUSD') as number) ?? 100;
+const monthlyBudgetUSD = asNum('monthlyBudgetUSD', app.node.tryGetContext('monthlyBudgetUSD'), 100);
 
 // LOCAL-FIRST BY DESIGN: the CryptaMap dashboard + query API would serve the
 // org's full crypto-weakness map — a harvest-now-decrypt-later target list — so
@@ -30,7 +56,7 @@ const monthlyBudgetUSD = (app.node.tryGetContext('monthlyBudgetUSD') as number) 
 // dashboard is built by default, so a default deploy has no public dashboard + API
 // surface to expose.
 const scanSchedule = (app.node.tryGetContext('scanSchedule') as string) ?? 'cron(0 6 ? * SUN *)';
-const retentionScans = (app.node.tryGetContext('retentionScans') as number) ?? 30;
+const retentionScans = asNum('retentionScans', app.node.tryGetContext('retentionScans'), 30);
 // Org fan-out tunables (all default-safe; org stacks only build when orgScanning=true).
 const orgRootId = (app.node.tryGetContext('orgRootId') as string) ?? 'r-exam';
 const organizationId = (app.node.tryGetContext('organizationId') as string) ?? 'o-exampleorgid';
@@ -57,6 +83,20 @@ if (orgScanning && (!scannerExternalId || scannerExternalId === 'cryptamap-scann
   throw new Error(
     'Refusing to deploy org scanning with the public default ExternalId — ' +
       'set -c scannerExternalId=<your-private-value>',
+  );
+}
+// Refuse to deploy ORG scanning with no notification target. alertEmail defaults
+// to '' (cdk.json), which yields a subscriber-less SNS topic: the operational
+// alarms (scanner/seed errors, state-machine failure/timeout) and the cost budget
+// would fire into the void, so an org-wide scan could silently break or run up
+// cost with nobody notified. Force the operator to wire an ops email. The escape
+// hatch `-c allowSilentAlerts=true` keeps demo/eval synth working; non-org synth
+// (orgScanning=false) is unaffected.
+if (orgScanning && !alertEmail && !allowSilentAlerts) {
+  throw new Error(
+    'Refusing to deploy org scanning with no alert subscriber — ' +
+      'set -c alertEmail=<ops-email> so operational alarms and the cost budget ' +
+      'reach someone (or pass -c allowSilentAlerts=true for demo/eval synth).',
   );
 }
 // Default to the primary Indian BFSI region (ap-south-1, Mumbai) PLUS us-east-1
@@ -162,6 +202,7 @@ if (orgScanning) {
     scannerFn: scanner.scannerFn,
     scannerRoleName: security.scannerRoleName,
     scannerExternalId,
+    organizationId,
     fanoutRegions,
     // Seed runs AS the orchestrator role so its per-account assume into the
     // member scanner roles is trusted (fixes the all-regions discovery bug,
@@ -173,18 +214,18 @@ if (orgScanning) {
   fanout.addDependency(scanner);
 }
 
-// AlertingStack: SecurityHub CRITICAL business-finding route + OPERATIONAL
-// alarms (scanner/seed/merge metricErrors, state-machine metricFailed /
-// metricTimedOut) routed to the SNS topic, plus the cost budget. The org refs
-// are passed only when org scanning built them; the scanner Lambda always
-// exists. Constructed after OrgFanout so those refs are available.
+// AlertingStack: OPERATIONAL alarms (scanner/seed metricErrors, state-machine
+// metricFailed / metricTimedOut) routed to the SNS topic, plus the cost budget.
+// The org refs are passed only when org scanning built them; the scanner Lambda
+// always exists. Constructed after OrgFanout so those refs are available. (The
+// merge rollup Lambda was removed — the Go merge runs inside the state machine,
+// whose failure/timeout alarms already cover the merge step.)
 const alerting = new AlertingStack(app, `${prefix}-Alerting`, {
   env,
   alertEmail,
   monthlyBudgetUSD,
   scannerFn: scanner.scannerFn,
   seedFn: fanout?.seedFn,
-  mergeFn: fanout?.mergeFn,
   stateMachine: fanout?.stateMachine,
 });
 alerting.addDependency(scanner);

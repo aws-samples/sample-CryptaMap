@@ -50,18 +50,30 @@ func (s VPNScanner) scan(ctx context.Context, client vpnEC2API, accountID, regio
 		if v.VpnConnectionId == nil {
 			continue
 		}
+		// DescribeVpnConnections keeps deleted/deleting connections visible for
+		// hours; they are not live transit surfaces, so do not emit them as
+		// current encrypted-transit assets.
+		if v.State == ec2types.VpnStateDeleted || v.State == ec2types.VpnStateDeleting {
+			continue
+		}
 
 		var props models.CryptoProperties
 		if v.Options != nil && len(v.Options.TunnelOptions) > 0 {
-			// Deepen: read the real negotiated IKE/IPsec algorithms across all
-			// tunnels rather than fabricating AES-256-GCM. Pointers in the SDK
-			// types can be nil, so every deref is guarded.
+			// Deepen: read the real configured/permitted IKE/IPsec algorithms
+			// across all tunnels rather than fabricating AES-256-GCM. Pointers in
+			// the SDK types can be nil, so every deref is guarded.
 			p1Enc, p2Enc, p1Int, p2Int, dh, ike := extractVPNTunnelAlgos(v.Options.TunnelOptions)
 			props = classifyVPNTunnel(p1Enc, p2Enc, p1Int, p2Int, dh, ike)
 		} else {
-			// Backward-compatible fallback when no tunnel options are present.
-			props = services.TLSProtocolProps("ipsec", "AES-256-GCM")
-			props.ProtocolProperties.Type = "ipsec"
+			// Fallback when no tunnel options are present: the channel is IPsec
+			// (definitional for a Site-to-Site VPN), but nothing was read about
+			// its algorithms — so assert NO cipher suite and NO version. The old
+			// fallback fabricated "AES-256-GCM" and stuffed "ipsec" into the TLS
+			// Version field; neither claim was provable from the API response.
+			props = models.CryptoProperties{
+				AssetType:          models.AssetTypeProtocol,
+				ProtocolProperties: &models.ProtocolProperties{Type: "ipsec"},
+			}
 		}
 
 		a := services.NewAsset("vpn", models.CategoryDataInTransit, accountID, region, *v.VpnConnectionId, "AWS::EC2::VPNConnection", props)

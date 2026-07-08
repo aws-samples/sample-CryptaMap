@@ -115,10 +115,11 @@ const kbNoCMKFieldNote = "Bedrock knowledge base data is encrypted at rest with 
 
 // classifyBedrockKeyTier is the PURE classification core shared by every Bedrock
 // resource family. Given the customer CMK ARN read from the resource (empty when
-// absent / unreadable), whether the per-resource Get FAILED (getErr), and an
+// absent / unreadable), whether the per-resource Get FAILED (getErr), whether the
+// SDK resource exposes NO per-resource CMK field at all (noCMKField), and an
 // optional family-specific note used for the no-CMK case (defaultNote falls back to
-// awsManagedDefaultNote), it returns the posture and the exact key-tier evidence
-// properties.
+// awsManagedDefaultNote / kbNoCMKFieldNote), it returns the posture and the exact
+// key-tier evidence properties.
 //
 // The posture is UNCONDITIONALLY SymmetricOnly: Bedrock always encrypts at rest
 // with AES-256 and there is no toggle to disable it, so the key tier is the ONLY
@@ -129,10 +130,18 @@ const kbNoCMKFieldNote = "Bedrock knowledge base data is encrypted at rest with 
 // "no customer CMK" we never observed). Instead key custody is recorded as honestly
 // undetermined (keyTier=unknown, kmsKeyId=UNRESOLVED) with keyCustodyUnknownNote.
 //
+// HONESTY when there is NO CMK field (noCMKField, e.g. knowledge bases): the SDK
+// exposes no per-resource CMK, so an empty CMK here means "not readable / on the
+// downstream store", NOT an observed AWS-managed default — the downstream store may
+// in fact be CMK-encrypted. Custody is therefore recorded as honestly undetermined
+// (keyTier=unknown, kmsKeyId=UNRESOLVED) with the family note, NEVER the fabricated
+// aws-managed-default verdict. This is a first-class classifier mode, not a post-hoc
+// override of the AWS-managed-default result.
+//
 // The returned map is exactly the Properties this scanner sets on top of the
 // posture/doc-fact stamps, so the table test can assert on the exact keys and
 // values without an AWS client.
-func classifyBedrockKeyTier(cmkArn string, getErr bool, defaultNote string) (models.CryptoPosture, map[string]string) {
+func classifyBedrockKeyTier(cmkArn string, getErr, noCMKField bool, defaultNote string) (models.CryptoPosture, map[string]string) {
 	props := map[string]string{}
 	if cmkArn != "" {
 		props["kmsKeyId"] = cmkArn
@@ -143,6 +152,15 @@ func classifyBedrockKeyTier(cmkArn string, getErr bool, defaultNote string) (mod
 		props["kmsKeyId"] = "UNRESOLVED"
 		props["keyTier"] = "unknown"
 		props["note"] = keyCustodyUnknownNote
+		return models.PostureSymmetricOnly, props
+	}
+	if noCMKField {
+		if defaultNote == "" {
+			defaultNote = kbNoCMKFieldNote
+		}
+		props["kmsKeyId"] = "UNRESOLVED"
+		props["keyTier"] = "unknown"
+		props["note"] = defaultNote
 		return models.PostureSymmetricOnly, props
 	}
 	if defaultNote == "" {
@@ -157,14 +175,15 @@ func classifyBedrockKeyTier(cmkArn string, getErr bool, defaultNote string) (mod
 // newBedrockAsset builds the baseline SymmetricOnly at-rest asset shared by every
 // family: AES-256, posture SymmetricOnly, the always-encrypts doc-fact provenance,
 // and the customer-vs-AWS-managed key-tier evidence. getErr is true when the
-// per-resource Get failed, so key custody is recorded as honestly undetermined
-// instead of the fabricated AWS-managed-default verdict. defaultNote overrides the
-// no-CMK note for families with a family-specific honesty note (knowledge bases);
-// an empty defaultNote uses the shared awsManagedDefaultNote.
-func newBedrockAsset(accountID, region, resourceID, resourceType, cmkArn string, getErr bool, defaultNote string) models.CryptoAsset {
+// per-resource Get failed and noCMKField is true when the SDK resource exposes no
+// per-resource CMK at all (knowledge bases); either way key custody is recorded as
+// honestly undetermined instead of the fabricated AWS-managed-default verdict.
+// defaultNote overrides the no-CMK note for families with a family-specific honesty
+// note (knowledge bases); an empty defaultNote uses the shared awsManagedDefaultNote.
+func newBedrockAsset(accountID, region, resourceID, resourceType, cmkArn string, getErr, noCMKField bool, defaultNote string) models.CryptoAsset {
 	a := services.NewAsset("bedrock", models.CategoryDataAtRest, accountID, region, resourceID, resourceType, services.AESAtRest())
 	services.StampDocFact(&a, "high", bedrockDocURL, "2026-06-15")
-	posture, props := classifyBedrockKeyTier(cmkArn, getErr, defaultNote)
+	posture, props := classifyBedrockKeyTier(cmkArn, getErr, noCMKField, defaultNote)
 	services.PostureProperty(&a, posture)
 	for k, v := range props {
 		a.Properties[k] = v
@@ -205,7 +224,7 @@ func (s BedrockScanner) scanCustomModels(ctx context.Context, client *bedrock.Cl
 				} else if g.ModelKmsKeyArn != nil {
 					cmk = *g.ModelKmsKeyArn
 				}
-				a := newBedrockAsset(accountID, region, id, "AWS::Bedrock::CustomModel", cmk, gerr != nil, "")
+				a := newBedrockAsset(accountID, region, id, "AWS::Bedrock::CustomModel", cmk, gerr != nil, false, "")
 				return a, true
 			})
 		assets = append(assets, page...)
@@ -250,7 +269,7 @@ func (s BedrockScanner) scanAgents(ctx context.Context, client *bedrockagent.Cli
 				} else if g.Agent != nil && g.Agent.CustomerEncryptionKeyArn != nil {
 					cmk = *g.Agent.CustomerEncryptionKeyArn
 				}
-				a := newBedrockAsset(accountID, region, id, "AWS::Bedrock::Agent", cmk, gerr != nil, "")
+				a := newBedrockAsset(accountID, region, id, "AWS::Bedrock::Agent", cmk, gerr != nil, false, "")
 				return a, true
 			})
 		assets = append(assets, page...)
@@ -260,6 +279,18 @@ func (s BedrockScanner) scanAgents(ctx context.Context, client *bedrockagent.Cli
 		nextToken = out.NextToken
 	}
 	return assets
+}
+
+// newBedrockKnowledgeBaseAsset builds the at-rest asset for a knowledge base. The
+// SDK KnowledgeBase resource exposes NO per-KB CMK field (any CMK lives on the
+// downstream data/vector store), so the machine-readable custody fields must NOT
+// assert the AWS-managed default — that tier was never observed and the downstream
+// store may be CMK-encrypted. This is expressed by the classifier's first-class
+// noCMKField mode (keyTier=unknown, kmsKeyId=UNRESOLVED) with the KB-specific note,
+// NOT by a post-hoc override; posture stays SymmetricOnly (Bedrock always encrypts
+// at rest with AES-256).
+func newBedrockKnowledgeBaseAsset(accountID, region, id string) models.CryptoAsset {
+	return newBedrockAsset(accountID, region, id, "AWS::Bedrock::KnowledgeBase", "", false, true, kbNoCMKFieldNote)
 }
 
 // scanKnowledgeBases lists Bedrock knowledge bases. The SDK KnowledgeBase resource
@@ -292,10 +323,7 @@ func (s BedrockScanner) scanKnowledgeBases(ctx context.Context, client *bedrocka
 			if kb.Name != nil && *kb.Name != "" {
 				id = *kb.Name
 			}
-			// No per-knowledge-base CMK field in the SDK resource -> AWS-managed default,
-			// with the KB-specific honesty note (CMK is not readable here, not absent).
-			a := newBedrockAsset(accountID, region, id, "AWS::Bedrock::KnowledgeBase", "", false, kbNoCMKFieldNote)
-			assets = append(assets, a)
+			assets = append(assets, newBedrockKnowledgeBaseAsset(accountID, region, id))
 		}
 		if out.NextToken == nil || *out.NextToken == "" {
 			break
@@ -342,7 +370,7 @@ func (s BedrockScanner) scanGuardrails(ctx context.Context, client *bedrock.Clie
 				} else if g.KmsKeyArn != nil {
 					cmk = *g.KmsKeyArn
 				}
-				a := newBedrockAsset(accountID, region, id, "AWS::Bedrock::Guardrail", cmk, gerr != nil, "")
+				a := newBedrockAsset(accountID, region, id, "AWS::Bedrock::Guardrail", cmk, gerr != nil, false, "")
 				if gs.Version != nil {
 					a.Properties["guardrailVersion"] = *gs.Version
 				}

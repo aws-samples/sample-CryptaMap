@@ -5,6 +5,7 @@ import (
 	"os"
 	"regexp"
 
+	"github.com/aws-samples/cryptamap/internal/compliance"
 	"gopkg.in/yaml.v3"
 )
 
@@ -24,20 +25,9 @@ func Default() *Config {
 				MaxRetries:  5,
 				BaseDelayMs: 100,
 				MaxDelayMs:  30000,
-				Jitter:      true,
 			},
 		},
 		Output: OutputConfig{
-			S3: S3Output{
-				Enabled:    true,
-				BucketName: "cryptamap-results-${AWS_ACCOUNT_ID}",
-				Prefix:     "scans/",
-			},
-			DynamoDB: DynamoDBOutput{
-				Enabled:        true,
-				TableName:      "CryptaMapScans",
-				RetentionScans: 30,
-			},
 			SecurityHub: SecurityHubOutput{
 				ProductARN: "arn:aws:securityhub:${REGION}:${ACCOUNT}:product/${ACCOUNT}/default",
 			},
@@ -67,11 +57,9 @@ func Default() *Config {
 			},
 		},
 		Compliance: ComplianceConfig{
-			Frameworks: []string{
-				"SEBI_CSCRF", "RBI_BANK_IN", "IRDAI_ICSG",
-				"CISA_M2302", "MITRE_PQCC", "CNSA_2_0", "EU_NIS2_DORA",
-				"CANADA_PQC", "EUROPOL_QSFF",
-			},
+			// Single-sourced from the compliance registry so the default framework
+			// list can never drift from the mappers that implement them.
+			Frameworks: compliance.KnownFrameworkIDs(),
 		},
 		Mock: MockConfig{
 			Enabled: false,
@@ -119,14 +107,13 @@ func expandEnv(s string) string {
 
 // ApplyOverrides applies CLI overrides onto the loaded config.
 type CLIOverrides struct {
-	Regions     []string
-	Accounts    []string
-	OrgScanning *bool
-	Mock        *bool
-	MockScale   *int
-	OutputDir   string
-	Profile     string
-	Verbose     *bool
+	Regions   []string
+	Accounts  []string
+	Mock      *bool
+	MockScale *int
+	OutputDir string
+	Profile   string
+	Verbose   *bool
 }
 
 func (c *Config) Apply(o CLIOverrides) {
@@ -135,9 +122,6 @@ func (c *Config) Apply(o CLIOverrides) {
 	}
 	if len(o.Accounts) > 0 {
 		c.Scan.Accounts = o.Accounts
-	}
-	if o.OrgScanning != nil {
-		c.Scan.OrgScanning.Enabled = *o.OrgScanning
 	}
 	if o.Mock != nil {
 		c.Mock.Enabled = *o.Mock

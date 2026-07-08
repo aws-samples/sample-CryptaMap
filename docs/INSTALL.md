@@ -9,7 +9,7 @@ a couple of repo-specific gotchas.
 
 | Tool | Version | Where it is pinned |
 |---|---|---|
-| Go | **1.26.2** | `go.mod` (`go 1.26.2`); CI installs via `go-version-file: go.mod` |
+| Go | **1.26** (latest 1.26.x patch) | `go.mod` (`go 1.26`); CI installs the newest 1.26.x via `go-version-file: go.mod` + `check-latest: true` |
 | Node.js | **20** | `.github/workflows/ci.yml` (dashboard + CDK jobs) |
 | npm | (ships with Node 20) | not separately pinned |
 
@@ -62,8 +62,10 @@ actions.
 **Minimum policy = the canonical least-privilege read list** — the **140 `readActions`**
 in [`cdk/policy/scanner-actions.json`](../cdk/policy/scanner-actions.json), generated
 from `cmd/gen-policy/main.go` and kept honest by `make check-policy`. (The same file
-also defines 3 orchestrator-only *writes* — `s3:PutObject`, `dynamodb:PutItem`,
-`securityhub:BatchImportFindings` — which the local operator does **not** need.) The
+also defines 2 orchestrator-only *writes* — `s3:PutObject` to the results bucket and
+`dynamodb:PutItem` to the scans table — which the local operator does **not** need.
+Live Security Hub import is **not** carried in this release; ASFF is a local export
+only.) The
 140-action read list is **narrower than the AWS-managed `ReadOnlyAccess` policy**,
 which CryptaMap deliberately avoids.
 
@@ -72,25 +74,23 @@ You may further trim it for a strictly single-account run:
 - **`organizations:ListAccounts`** is not needed — it is only used by the org
   fan-out to enumerate member accounts. The CLI scans only the caller account (it
   *warns* and ignores `--org` / `--accounts`).
-- **None of the three orchestrator writes** (`s3:PutObject`, `dynamodb:PutItem`,
-  `securityhub:BatchImportFindings`) are needed — the CLI writes every artifact to
+- **Neither of the two orchestrator writes** (`s3:PutObject` to the results bucket,
+  `dynamodb:PutItem` to the scans table) is needed — the CLI writes every artifact to
   **local files**.
 
 Beyond the per-service read actions, the CLI itself calls only
 `sts:GetCallerIdentity` (to resolve the account id) and, with `--regions all`,
 `ec2:DescribeRegions` — both already in the list.
 
-## Repo gotcha: scope your Go commands
+## Go commands: either form works
 
 ```bash
-# Do this:
-go build ./internal/... ./pkg/... ./cmd/...
-go test  ./internal/... ./pkg/... ./cmd/...
-
-# NOT this — it fails:
+# Both of these work:
 go build ./...
+go build ./internal/... ./pkg/... ./cmd/...
 ```
 
-Bare `./...` fails because `cdk/node_modules` vendors invalid standalone `.go`
-init-template files. CI works around this by not running `npm ci` in the Go job; you
-should scope to the module packages as shown.
+Bare `./...` now works: the nested `cdk/go.mod` and `dashboard/go.mod` module
+boundaries exclude `cdk/node_modules` (and its standalone `.go` init-template files)
+from the root module, so `./...` no longer walks into them. Scoping to the module
+packages (`./internal/... ./pkg/... ./cmd/...`) is equivalent and also fine.

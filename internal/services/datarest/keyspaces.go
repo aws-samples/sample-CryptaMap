@@ -94,7 +94,15 @@ func (s KeyspacesScanner) scan(ctx context.Context, client keyspacesAPI, account
 			for {
 				tblOut, terr := client.ListTables(ctx, &keyspaces.ListTablesInput{KeyspaceName: ks.KeyspaceName, NextToken: tblToken})
 				if terr != nil {
+					// HONESTY CONTRACT: a denied/throttled ListTables would silently
+					// drop this whole keyspace (all remaining pages) while the scan
+					// reports clean success. Emit a per-keyspace PostureUnknown
+					// placeholder so the coverage gap stays VISIBLE in the CBOM.
 					fmt.Fprintf(os.Stderr, "keyspaces:%s ListTables: %v\n", ksName, terr)
+					a := services.NewAsset("keyspaces", models.CategoryDataAtRest, accountID, region, ksName, "AWS::Cassandra::Keyspace", services.UnknownAtRest())
+					services.PostureProperty(&a, models.PostureUnknown)
+					a.Properties["note"] = "ListTables failed for this keyspace; its tables could not be enumerated, so table-level coverage is incomplete (not a clean all-clear)."
+					assets = append(assets, a)
 					break
 				}
 				for _, t := range tblOut.Tables {
@@ -107,11 +115,20 @@ func (s KeyspacesScanner) scan(ctx context.Context, client keyspacesAPI, account
 					// Keyspaces encrypts ALL tables at rest with AES-256 and it cannot be
 					// disabled, so posture is unconditionally SymmetricOnly. The
 					// EncryptionSpecification only selects the key tier (AWS-owned default
-					// vs customer-managed); a nil spec or a GetTable error means the
-					// AWS-owned default key, NOT no-encryption.
+					// vs customer-managed); a nil spec on a SUCCESSFUL GetTable means the
+					// AWS-owned default key, while a GetTable ERROR leaves custody
+					// undetermined (UNRESOLVED), never a fabricated AWS-owned verdict.
 					kmsKey := "AWS_OWNED_KMS_KEY"
+					keyNote := ""
 					if derr != nil {
+						// A GetTable failure does NOT prove the AWS-owned default key:
+						// the table may be encrypted under a customer CMK we could not
+						// read. Record custody as honestly undetermined (never a
+						// fabricated "no customer key" verdict); the doc-fact posture
+						// (always AES-256) is unaffected.
 						fmt.Fprintf(os.Stderr, "keyspaces:%s GetTable: %v\n", id, derr)
+						kmsKey = "UNRESOLVED"
+						keyNote = "GetTable failed; the table is still AES-256 encrypted at rest (Keyspaces doc-fact), but the key tier (AWS-owned vs customer CMK) could not be read."
 					} else if spec := desc.EncryptionSpecification; spec != nil {
 						if spec.Type == kstypes.EncryptionTypeCustomerManagedKmsKey && spec.KmsKeyIdentifier != nil && *spec.KmsKeyIdentifier != "" {
 							kmsKey = *spec.KmsKeyIdentifier
@@ -121,7 +138,14 @@ func (s KeyspacesScanner) scan(ctx context.Context, client keyspacesAPI, account
 					services.PostureProperty(&a, models.PostureSymmetricOnly)
 					services.StampDocFactKeyed(&a, "datarest/keyspaces/at-rest-aes256")
 					a.Properties["kmsKeyId"] = kmsKey
+					if keyNote != "" {
+						a.Properties["keyTier"] = "unknown"
+						a.Properties["note"] = keyNote
+					}
 					assets = append(assets, a)
+					if services.TruncationCapReached(len(assets), s.Name(), region) {
+						return assets, nil
+					}
 				}
 				if tblOut.NextToken == nil || *tblOut.NextToken == "" {
 					break
