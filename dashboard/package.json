@@ -10,7 +10,7 @@
     "lint": "eslint ."
   },
   "dependencies": {
-    "@cloudscape-design/collection-hooks": "^1.0.97",
+    "@cloudscape-design/collection-hooks": "^1.0.99",
     "@cloudscape-design/components": "^3.0.1306",
     "@cloudscape-design/global-styles": "^1.0.59",
     "html2pdf.js": "^0.14.0",
