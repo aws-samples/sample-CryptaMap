@@ -9,24 +9,72 @@
 #
 # github-actions updates keep the SHA-pinned first-party actions current while
 # preserving the pin (Dependabot bumps the SHA and the trailing version comment).
+#
+# GROUPING: go.mod pulls in ~89 individual aws-sdk-go-v2 service modules; without
+# grouping, Dependabot opens a separate PR per service each week, and because they
+# all edit the same go.mod they serialise into a rebase pile-up. The `groups` blocks
+# below batch related updates into a single PR per surface so routine maintenance is
+# one review, not dozens. Security updates still open individually and immediately
+# (a group's applies-to defaults to version-updates, so grouping does not delay or
+# hide security fixes).
 version: 2
 updates:
   - package-ecosystem: gomod
     directory: /
     schedule:
       interval: weekly
+    groups:
+      # All AWS SDK for Go v2 modules (core + smithy + the ~89 service clients)
+      # move together — one PR instead of dozens of conflicting single-service PRs.
+      aws-sdk-go-v2:
+        patterns:
+          - "github.com/aws/aws-sdk-go-v2*"
+          - "github.com/aws/smithy-go"
+      # Everything else in the Go module (x/*, cdk-go, jsii, excelize, cobra, …)
+      # batched into a second PR so the weekly Go surface is at most two PRs.
+      go-dependencies:
+        patterns:
+          - "*"
+        exclude-patterns:
+          - "github.com/aws/aws-sdk-go-v2*"
+          - "github.com/aws/smithy-go"
 
   - package-ecosystem: npm
     directory: /dashboard
     schedule:
       interval: weekly
+    groups:
+      # Dev-tooling (vite, typescript, types, eslint, …) and runtime deps grouped
+      # separately so a build-tooling bump is reviewed apart from a shipped-dep bump.
+      dashboard-dev:
+        dependency-type: development
+        patterns:
+          - "*"
+      dashboard-prod:
+        dependency-type: production
+        patterns:
+          - "*"
 
   - package-ecosystem: npm
     directory: /cdk
     schedule:
       interval: weekly
+    groups:
+      cdk-dev:
+        dependency-type: development
+        patterns:
+          - "*"
+      cdk-prod:
+        dependency-type: production
+        patterns:
+          - "*"
 
   - package-ecosystem: github-actions
     directory: /
     schedule:
       interval: weekly
+    groups:
+      # Batch the first-party action-SHA bumps into one PR.
+      github-actions:
+        patterns:
+          - "*"
