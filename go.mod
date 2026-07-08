@@ -4,7 +4,7 @@ go 1.26
 
 require (
 	github.com/aws/aws-lambda-go v1.54.0
-	github.com/aws/aws-sdk-go-v2 v1.42.0
+	github.com/aws/aws-sdk-go-v2 v1.42.1
 	github.com/aws/aws-sdk-go-v2/config v1.32.20
 	github.com/aws/aws-sdk-go-v2/credentials v1.19.19
 	github.com/aws/aws-sdk-go-v2/service/acm v1.39.2
@@ -66,7 +66,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/organizations v1.51.6
 	github.com/aws/aws-sdk-go-v2/service/paymentcryptography v1.31.1
 	github.com/aws/aws-sdk-go-v2/service/qldb v1.32.2
-	github.com/aws/aws-sdk-go-v2/service/quicksight v1.114.1
+	github.com/aws/aws-sdk-go-v2/service/quicksight v1.117.0
 	github.com/aws/aws-sdk-go-v2/service/rds v1.118.4
 	github.com/aws/aws-sdk-go-v2/service/redshift v1.62.10
 	github.com/aws/aws-sdk-go-v2/service/redshiftserverless v1.35.8
@@ -88,7 +88,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/workspaces v1.68.3
 	github.com/aws/aws-sdk-go-v2/service/workspacesweb v1.40.7
 	github.com/aws/aws-sdk-go-v2/service/xray v1.37.3
-	github.com/aws/smithy-go v1.27.1
+	github.com/aws/smithy-go v1.27.3
 	github.com/google/uuid v1.6.0
 	github.com/santhosh-tekuri/jsonschema/v5 v5.3.1
 	github.com/spf13/cobra v1.10.2
@@ -99,8 +99,8 @@ require (
 require (
 	github.com/aws/aws-sdk-go-v2/aws/protocol/eventstream v1.7.11 // indirect
 	github.com/aws/aws-sdk-go-v2/feature/ec2/imds v1.18.25 // indirect
-	github.com/aws/aws-sdk-go-v2/internal/configsources v1.4.29 // indirect
-	github.com/aws/aws-sdk-go-v2/internal/endpoints/v2 v2.7.29 // indirect
+	github.com/aws/aws-sdk-go-v2/internal/configsources v1.4.30 // indirect
+	github.com/aws/aws-sdk-go-v2/internal/endpoints/v2 v2.7.30 // indirect
 	github.com/aws/aws-sdk-go-v2/internal/v4a v1.4.30 // indirect
 	github.com/aws/aws-sdk-go-v2/service/internal/accept-encoding v1.13.10 // indirect
 	github.com/aws/aws-sdk-go-v2/service/internal/checksum v1.9.18 // indirect
