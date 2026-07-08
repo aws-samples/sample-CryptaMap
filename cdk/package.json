@@ -10,7 +10,7 @@
     "diff": "cdk diff"
   },
   "devDependencies": {
-    "@types/node": "^22.0.0",
+    "@types/node": "^26.1.1",
     "@types/source-map-support": "^0.5.10",
     "aws-cdk": "^2.1129.0",
     "source-map-support": "^0.5.21",
