@@ -152,8 +152,8 @@ github.com/aws/aws-sdk-go-v2/service/redshift v1.62.10 h1:FN0N8F3lWDt4HkLguggJve
 github.com/aws/aws-sdk-go-v2/service/redshift v1.62.10/go.mod h1:Z2wH8ORxGHmPYOkHd+jepWHbVRiosBYwkk5XdZhfIvY=
 github.com/aws/aws-sdk-go-v2/service/redshiftserverless v1.35.8 h1:B+bmVtCAd+6brL1lrAckNIhDz2whBadB3w4HtuT1Es0=
 github.com/aws/aws-sdk-go-v2/service/redshiftserverless v1.35.8/go.mod h1:7oFigiEEnigDC3wDQxFhHKvOScfPMu9qnlv0R3OmE9E=
-github.com/aws/aws-sdk-go-v2/service/rolesanywhere v1.23.7 h1:KkeALqIjMAJANvklJB+7xuCn/uNOImd+MD8tGFcxrGU=
-github.com/aws/aws-sdk-go-v2/service/rolesanywhere v1.23.7/go.mod h1:fSG8CBXimVZi6bSpjBdyoEY2/VZibL5dyR20q3cUBgc=
+github.com/aws/aws-sdk-go-v2/service/rolesanywhere v1.24.0 h1:7V5OKtf+bYa4jkQTASAiGy9rtyF2gs3bPW0RfhRVdCo=
+github.com/aws/aws-sdk-go-v2/service/rolesanywhere v1.24.0/go.mod h1:Jv4yT9ASKaTBjavpw5SoiYIEVxeAdz635+9ODTyfEyE=
 github.com/aws/aws-sdk-go-v2/service/s3 v1.102.2 h1:ie4ElCmUKS26pzrZcIk/lmt4yWjAqLLcawstyQCh298=
 github.com/aws/aws-sdk-go-v2/service/s3 v1.102.2/go.mod h1:zjsomFeX5duj+4PlMB+o4JoWTIx+G0XMyzjYrUbQkN0=
 github.com/aws/aws-sdk-go-v2/service/sagemaker v1.250.2 h1:N2bf77yKmfEviYZ+4lHX2XScGegPP0f6fqR7YTnnBWs=
