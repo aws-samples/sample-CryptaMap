@@ -38,13 +38,18 @@ func policyVersion(p string) (string, models.CryptoPosture) {
 		return "1.3", models.PosturePQCHybrid
 	case strings.Contains(pl, "tls13"), strings.Contains(pl, "tls-1-3"):
 		return "1.3", models.PostureNonPQCClassical
-	case strings.Contains(pl, "2016-08"), strings.Contains(pl, "tls-1-2"), strings.Contains(pl, "fs-1-2"):
+	case strings.Contains(pl, "tls-1-2"), strings.Contains(pl, "fs-1-2"):
+		// Name encodes an explicit TLS 1.2 floor (e.g. ELBSecurityPolicy-TLS-1-2-2017-01).
 		return "1.2", models.PostureNonPQCClassical
 	case strings.Contains(pl, "2015-05"), strings.Contains(pl, "tls-1-0"), strings.Contains(pl, "tls-1-1"):
 		return "1.0", models.PostureLegacyTLS
 	}
 	// Unrecognized / custom / future name: do NOT assert a classical 1.2 default
 	// (a guessed default must never masquerade as a verified classification).
+	// This includes ELBSecurityPolicy-2016-08 and other date-only default names:
+	// 2016-08 enables TLSv1/1.1/1.2, so mapping it to a clean "1.2" fabricates a
+	// modern floor the name does not prove. Only DescribeSSLPolicies (which reads
+	// the real SslProtocols) may classify such policies.
 	return "", models.PostureUnknown
 }
 
@@ -103,18 +108,38 @@ func (s ALBScanner) scan(ctx context.Context, client albELBV2API, certResolver *
 				continue
 			}
 			for _, l := range lout.Listeners {
-				policy := ""
-				if l.SslPolicy != nil {
-					policy = *l.SslPolicy
-				}
 				port := int32(0)
 				if l.Port != nil {
 					port = *l.Port
 				}
+				id := fmt.Sprintf("%s-%d", *lb.LoadBalancerName, port)
+
+				// Plaintext HTTP listener: a VERIFIED no-encryption finding (the
+				// protocol is read straight from the API), not a "tls"-typed
+				// Unknown. Mirrors the Classic ELB plaintext-listener handling.
+				if l.Protocol == elbv2types.ProtocolEnumHttp {
+					a := services.NewAsset("alb", models.CategoryDataInTransit, accountID, region, id, "AWS::ElasticLoadBalancingV2::Listener", services.NoEncryption())
+					services.PostureProperty(&a, models.PostureNoEncryption)
+					a.Properties["listenerProtocol"] = string(l.Protocol)
+					a.Properties["note"] = "ALB listener serves plaintext HTTP (no TLS)."
+					services.StampObserved(&a, "high")
+					assets = append(assets, a)
+					continue
+				}
+				policy := ""
+				if l.SslPolicy != nil {
+					policy = *l.SslPolicy
+				}
+				// Skip non-TLS listeners: without an SSL policy AND without an
+				// HTTPS/TLS protocol there is no TLS configuration to classify,
+				// and running such a listener through the SSL-policy resolver
+				// would fabricate a "tls"-typed asset (mirrors nlb.go's filter).
+				if policy == "" && l.Protocol != elbv2types.ProtocolEnumHttps && l.Protocol != elbv2types.ProtocolEnumTls {
+					continue
+				}
 				// Resolve version + posture from the REAL SslProtocols/Ciphers
 				// (cached per policy) instead of guessing from the policy name.
 				res := resolver.resolve(ctx, policy)
-				id := fmt.Sprintf("%s-%d", *lb.LoadBalancerName, port)
 				a := services.NewAsset("alb", models.CategoryDataInTransit, accountID, region, id, "AWS::ElasticLoadBalancingV2::Listener", res.props)
 				services.PostureProperty(&a, res.posture)
 				if policy != "" {

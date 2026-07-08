@@ -15,9 +15,19 @@ your account and lets you decide when and where findings land.
    there is nothing to register; the default product is the standard path for
    importing custom findings.
 3. **Permission:** the importing principal needs `securityhub:BatchImportFindings`
-   scoped to that `product/<account>/default` ARN (this is exactly the statement the
-   deployed orchestrator role gets — see `DEPLOYMENT.md` §3 and
-   `cmd/gen-policy/main.go`).
+   scoped to that `product/<account>/default` ARN. **You must grant this to the
+   principal you import with yourself** — the deployed CryptaMap roles deliberately
+   do NOT carry it (nothing in CryptaMap calls `BatchImportFindings`; the grant was
+   removed as an unused write on a production-facing role — see the removal note in
+   `cmd/gen-policy/main.go`). Example statement for your importing user/role:
+
+   ```json
+   {
+     "Effect": "Allow",
+     "Action": "securityhub:BatchImportFindings",
+     "Resource": "arn:<partition>:securityhub:<region>:<account>:product/<account>/default"
+   }
+   ```
 
 ## Import command
 
@@ -59,8 +69,18 @@ local ASFF validator **fails fast** with an "unexpanded `${...}` placeholder" er
 rather than letting `BatchImportFindings` reject it downstream. Set a concrete
 `product_arn`, or rely on the default per-finding substitution.
 
-## After import: optional alerting
+## After import: alerting on imported findings
 
-If you deployed the `CryptaMap-Alerting` stack, an EventBridge rule matches imported
-CryptaMap findings with `Severity.Label = CRITICAL` and routes them to a
-CMK-encrypted SNS topic (email subscription) — see `cdk/lib/alerting-stack.ts`.
+The `CryptaMap-Alerting` stack does **not** alert on imported Security Hub
+findings. It once carried an EventBridge rule matching imported CryptaMap findings
+with `Severity.Label = CRITICAL`, but that rule was removed as dead: findings
+imported via the account-default product ARN are stamped with ProductName
+"Default" (not "CryptaMap"), so the pattern could never match — see the removal
+note in `cdk/lib/alerting-stack.ts`. The Alerting stack now carries only
+**operational** alarms (failed scan Lambdas / Step Functions executions).
+
+To alert on your imported findings, create your own EventBridge rule on the
+`aws.securityhub` "Security Hub Findings - Imported" event, matching on fields
+Security Hub actually stamps for a default-product import (e.g.
+`Severity.Label = CRITICAL` plus your own `GeneratorId`/`Title` discriminator),
+and route it to a topic of your choosing.

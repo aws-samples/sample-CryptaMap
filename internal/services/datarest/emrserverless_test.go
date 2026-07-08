@@ -100,9 +100,9 @@ func TestEMRServerlessScanListErrorPropagates(t *testing.T) {
 
 // TestEMRServerlessScanHonestyPosture verifies the at-rest honesty contract for an
 // always-encrypted service: EMR Serverless encrypts worker disks unconditionally,
-// so posture must be SymmetricOnly (never NoEncryption). Because the default key
-// is service-owned (no customer CMK opt-in is read here), the asset must record
-// the AWS-owned-key default WITHOUT presenting a clean all-clear / PQC-safe verdict.
+// so posture must be SymmetricOnly (never NoEncryption). Because ListApplications
+// exposes no key configuration, custody must be recorded as undetermined
+// (UNRESOLVED/unknown) WITHOUT presenting a clean all-clear / PQC-safe verdict.
 func TestEMRServerlessScanHonestyPosture(t *testing.T) {
 	client := &fakeEMRServerlessClient{
 		pages: []*emrserverless.ListApplicationsOutput{
@@ -130,9 +130,14 @@ func TestEMRServerlessScanHonestyPosture(t *testing.T) {
 	if posture != string(models.PostureSymmetricOnly) {
 		t.Errorf("expected posture %q (always-on AES-256), got %q", models.PostureSymmetricOnly, posture)
 	}
-	// Default key is AWS-owned: recorded explicitly, not silently treated as a CMK.
-	if a.Properties["kmsKeyId"] != "AWS_OWNED_KMS_KEY" {
-		t.Errorf("expected AWS-owned-key default recorded in kmsKeyId, got %q", a.Properties["kmsKeyId"])
+	// ListApplications exposes no key configuration, so custody must be recorded
+	// as honestly undetermined — never a fabricated AWS-owned-default (or CMK)
+	// custody verdict that was never observed.
+	if a.Properties["kmsKeyId"] != "UNRESOLVED" {
+		t.Errorf("expected kmsKeyId UNRESOLVED (key config not readable from ListApplications), got %q", a.Properties["kmsKeyId"])
+	}
+	if a.Properties["keyTier"] != "unknown" {
+		t.Errorf("expected keyTier unknown (custody undetermined), got %q", a.Properties["keyTier"])
 	}
 	// The asset must carry an honest note explaining the AES-256 always-on default
 	// and that a customer CMK is only a key-tier refinement (no clean all-clear).

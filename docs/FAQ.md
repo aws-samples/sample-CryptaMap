@@ -109,8 +109,9 @@ treats absence of data as a clean result.
 **Does CryptaMap modify any AWS resources?**
 No. The scanners make only read/describe/list calls (`Describe*`/`List*`/`Get*`) and
 never mutate resources. The deployed least-privilege policy contains read actions plus
-three resource-scoped writes used **solely by the org orchestrator** (writing results
-to your own S3/DynamoDB and importing to your own Security Hub).
+two resource-scoped writes used **solely by the org orchestrator** (`s3:PutObject` to
+your own results bucket and `dynamodb:PutItem` to your own scans table). Live Security
+Hub import is **not** carried in this release — ASFF is a local export only.
 
 **Where does my scan data go?**
 It never leaves your AWS account/org. There is **no internet-facing API or dashboard
@@ -177,9 +178,9 @@ chosen ExternalId) to get org-wide coverage.
 > Full detail is in **[`docs/INSTALL.md`](./INSTALL.md)**. The essentials:
 
 **What toolchain do I need?**
-**Go 1.26.2** (pinned in `go.mod`) and **Node 20** (pinned in CI for the dashboard and
-CDK jobs), plus npm. These are the only authoritative pins — there is no `.nvmrc` or
-`engines` field.
+**Go 1.26** (the minimum declared in `go.mod`; CI builds on the latest 1.26.x patch) and
+**Node 20** (pinned in CI for the dashboard and CDK jobs), plus npm. These are the only
+authoritative pins — there is no `.nvmrc` or `engines` field.
 
 **How do I build the CLI?**
 `make build-cli` produces `./dist/cryptamap` with a *placeholder* dashboard UI. To get
@@ -198,15 +199,18 @@ Path 2 uses your own credentials directly (no role assumption), so your principa
 hold the read actions. The recommended minimum is a custom read-only policy equal to
 the **140 read actions** (`readActions`) in
 [`cdk/policy/scanner-actions.json`](../cdk/policy/scanner-actions.json) — the file also
-defines 3 orchestrator-only writes you do **not** need for a local Path-2 scan —
+defines 2 orchestrator-only writes (`s3:PutObject` to the results bucket,
+`dynamodb:PutItem` to the scans table) you do **not** need for a local Path-2 scan —
 narrower than AWS-managed `ReadOnlyAccess`. You can drop `organizations:ListAccounts`
-for a strict single-account run and need none of the three orchestrator writes. Full detail:
+for a strict single-account run and need neither of the two orchestrator writes. Full detail:
 [`docs/INSTALL.md`](./INSTALL.md#iam-for-the-local-operator-path-2-single-account-scan).
 
 **Any Go-command gotcha in this repo?**
-Yes — scope Go commands to the module packages
-(`go build ./internal/... ./pkg/... ./cmd/...`) and avoid bare `./...`, because
-`cdk/node_modules` vendors invalid standalone `.go` init-template files.
+No — bare `go build ./...` and `go vet ./...` now work. The nested `cdk/go.mod` and
+`dashboard/go.mod` module boundaries exclude `cdk/node_modules` (and its standalone
+`.go` init-template files) from the root module, so `./...` no longer walks into them.
+Scoping to the module packages (`go build ./internal/... ./pkg/... ./cmd/...`) is still
+fine but no longer required.
 
 ---
 
@@ -258,8 +262,8 @@ unknown), plus two honest derived callouts:
 - **% migrated to post-quantum end-to-end** — `pqc-ready` ÷ **all** assets (including
   `unknown`).
 
-Hybrid post-quantum key exchange (`pqc-hybrid`) and symmetric-only AES-256 are **never**
-counted as fully quantum-resistant. See
+Hybrid post-quantum key exchange (`pqc-hybrid`) and symmetric-only encryption are **never**
+counted as fully migrated to post-quantum. See
 [`docs/PQC-READINESS-CROSSWALK.md`](./PQC-READINESS-CROSSWALK.md).
 
 **How is severity assigned?**
@@ -279,10 +283,12 @@ work — most urgent first.
 
 **What posture verdicts will I see per asset?**
 `pqc-hybrid` (TLS 1.3 cipher with X25519 + ML-KEM — key-exchange only), `symmetric-only`
-(e.g. AES-256-GCM at rest), `non-pqc-classical` (traditional RSA/ECDHE), `legacy-tls`
-(TLS 1.0/1.1), `no-encryption`, and `unknown`. **AES-256 at rest is quantum-resistant**
-(Grover only halves effective strength), so **no action is required** — it is never
-counted as PQC migration progress.
+(symmetric encryption at rest, e.g. AES-GCM), `non-pqc-classical` (traditional RSA/ECDHE),
+`legacy-tls` (TLS 1.0/1.1), `no-encryption`, and `unknown`. **Symmetric encryption at rest
+is quantum-resistant** (Grover only halves effective strength — AES-256 keeps a full 128-bit
+margin, AES-128/192 a usable but smaller one), so **no action is required** — the verdict is
+key-size-neutral (the scanner does not assert a specific key length it did not observe) and it
+is never counted as PQC migration progress.
 
 ---
 
@@ -379,8 +385,10 @@ inventory: `pqc-hybrid`, `symmetric-only`, `non-pqc-classical`, `legacy-tls`,
 
 **How do I view results?**
 Run `cryptamap serve --dir <output>` to view results in the local dashboard over
-loopback; the dashboard's Export button produces a regulator-grade PDF. The Markdown
-summary is a CLI-friendly alternative.
+loopback. The **Reports & downloads** page offers every scan artifact as a
+one-click download: the CycloneDX CBOM is the machine-readable regulator
+deliverable, while the offline HTML report, Markdown summary, and any
+browser-exported PDF are human-readable summaries of the same scan.
 
 **How do I import the ASFF output into AWS Security Hub?**
 CryptaMap writes a local ASFF JSON array; you run the import. In short: enable Security
@@ -462,7 +470,8 @@ provisioned. You are responsible for any charges incurred.
 ## 12. Operations, teardown, partitions & offline use
 
 **How do I tear down CryptaMap?**
-`make destroy` runs `cdk destroy --all --force` for the in-account stacks
+`make destroy` runs `cdk destroy --all` for the in-account stacks (interactive
+confirmation by default; set `CI=1` to add `--force` in automation)
 (destructive). Full uninstall is multi-step and partly manual: delete the StackSet
 stack instances from member accounts **first**, run the destroy, then manually clean
 the RETAINed evidence store, and in DELEGATED_ADMIN mode deregister the StackSets
@@ -470,10 +479,11 @@ delegated administrator. Full ordered procedure:
 [`DEPLOYMENT.md` → Teardown](../DEPLOYMENT.md#teardown--uninstall-ordered-procedure).
 
 **What survives a `cdk destroy`?**
-The KMS CMK, results bucket (versioned), access-logs bucket, DynamoDB scans table, and
-the state-machine CloudWatch log group are RETAIN-on-destroy and survive; delete them
-manually (emptying all object versions from the bucket) to fully decommission.
-`make clean` only removes local build artifacts.
+The evidence-store KMS CMK, results bucket (versioned), access-logs bucket, DynamoDB
+scans table, the alert-topic KMS CMK (`AlertTopicKey`, the `CryptaMap-Alerting` SNS
+topic's encryption key), and the state-machine CloudWatch log group are RETAIN-on-destroy
+and survive; delete them manually (emptying all object versions from the bucket) to
+fully decommission. `make clean` only removes local build artifacts.
 
 **Does CryptaMap work in AWS GovCloud (US) and China partitions?**
 Yes, with documented caveats. ASFF/Security Hub findings are partition-correct and the

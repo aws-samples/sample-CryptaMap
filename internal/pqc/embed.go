@@ -230,6 +230,12 @@ var scannerDocFacts = map[string]ScannerDocFact{
 		Confidence: "high",
 		AsOf:       "2026-06-09",
 	},
+	"transit/msk_transit/serverless-tls-only": {
+		Value:      "Amazon MSK Serverless clusters are TLS-only for client-broker traffic: unlike provisioned clusters (which expose EncryptionInTransit.ClientBroker and can permit TLS_PLAINTEXT or PLAINTEXT), a serverless cluster exposes no EncryptionInfo/EncryptionInTransit field and always enforces TLS in transit per AWS. When the scanner sees the serverless/nil-EncryptionInfo path it therefore reports enforced classical TLS on this documented guarantee rather than any read field; the negotiated TLS version per connection is not exposed by the API and the transit cipher family is classical (non-PQC). Stamped at high confidence for the serverless / nil-EncryptionInfo path only.",
+		SourceURL:  "https://docs.aws.amazon.com/msk/latest/developerguide/serverless.html",
+		Confidence: "high",
+		AsOf:       "2026-06-09",
+	},
 	"transit/neptune_transit/ssl-https-only": {
 		Value:      "Amazon Neptune only allows SSL connections through HTTPS to any instance or cluster endpoint, and Neptune endpoints in engine version 1.0.4.0 and above only support HTTPS requests. This is a universal AWS guarantee (plaintext is not accepted), requiring at least TLS 1.2 with strong cipher suites and TLS 1.3 from engine version 1.3.2.0. The negotiated TLS version per connection is not exposed by any API, and the transit cipher family is classical (non-PQC) — no post-quantum / hybrid key exchange is documented for Neptune. The transit posture is therefore enforced classical TLS, stamped at high confidence.",
 		SourceURL:  "https://docs.aws.amazon.com/neptune/latest/userguide/security-ssl.html",

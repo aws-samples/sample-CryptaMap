@@ -152,6 +152,7 @@ func TestOpensearchTransitClassification(t *testing.T) {
 		enforceHTTPS *bool
 		wantPosture  models.CryptoPosture
 		wantTLSMin   string // "" means don't assert
+		wantNote     bool   // require Properties["note"] naming what was unreadable
 	}{
 		{
 			name:         "tls12_enforced_is_classical_not_no_encryption",
@@ -168,11 +169,32 @@ func TestOpensearchTransitClassification(t *testing.T) {
 			wantTLSMin:   "1.0",
 		},
 		{
-			name:         "pfs_policy_is_tls13_classical_not_pqc",
+			// The PFS policy's FLOOR is TLS 1.2 (it permits up to 1.3). Reporting
+			// TLSMinVersion=1.3 was a fabrication that made a "floor>=1.3"
+			// compliance check falsely pass on a floor-1.2 domain.
+			name:         "pfs_policy_floor_is_12_not_13",
 			policy:       "Policy-Min-TLS-1-2-PFS-2023-10",
 			enforceHTTPS: opensearchtransitBoolptr(true),
 			wantPosture:  models.PostureNonPQCClassical,
-			wantTLSMin:   "1.3",
+			wantTLSMin:   "1.2",
+		},
+		{
+			// Same for the FIPS policy: floor 1.2, ceiling 1.3.
+			name:         "fips_policy_floor_is_12_not_13",
+			policy:       "Policy-Min-TLS-1-2-RFC9151-FIPS-2024-08",
+			enforceHTTPS: opensearchtransitBoolptr(true),
+			wantPosture:  models.PostureNonPQCClassical,
+			wantTLSMin:   "1.2",
+		},
+		{
+			// Unrecognized policy value: nothing provable from the API data read,
+			// so the verdict is Unknown with an explanatory note — never a
+			// fabricated "1.2 classical" default.
+			name:         "unrecognized_policy_is_unknown_not_fabricated_classical",
+			policy:       "Some-Future-Policy-2031-01",
+			enforceHTTPS: opensearchtransitBoolptr(true),
+			wantPosture:  models.PostureUnknown,
+			wantNote:     true,
 		},
 		{
 			// EnforceHTTPS=false: plaintext HTTP accepted regardless of the TLS
@@ -214,6 +236,17 @@ func TestOpensearchTransitClassification(t *testing.T) {
 				}
 				if got := a.CryptoProps.ProtocolProperties.TLSMinVersion; got != tc.wantTLSMin {
 					t.Errorf("TLSMinVersion: want %q, got %q", tc.wantTLSMin, got)
+				}
+			}
+			if tc.wantPosture == models.PostureUnknown {
+				// An Unknown verdict must never carry a fabricated TLS floor.
+				if pp := a.CryptoProps.ProtocolProperties; pp != nil && pp.TLSMinVersion != "" {
+					t.Errorf("Unknown posture must not carry a fabricated TLSMinVersion, got %q", pp.TLSMinVersion)
+				}
+			}
+			if tc.wantNote {
+				if a.Properties["note"] == "" {
+					t.Errorf("expected Properties[\"note\"] naming what could not be read, got empty")
 				}
 			}
 		})

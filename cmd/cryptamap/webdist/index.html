@@ -1,18 +1,38 @@
 <!doctype html>
+<!--
+  PLACEHOLDER dashboard shell (committed). This is NOT the real dashboard.
+
+  The real Vite build output is staged into this directory by `make build-serve`
+  (it copies dashboard/dist/* over this file before `go build`). This committed
+  placeholder deliberately references NO hashed asset bundles — an earlier
+  committed copy of a real build's index.html referenced gitignored hashed
+  script/style bundles, so a clean-checkout `go build` embedded an index.html
+  whose scripts 404'd and `cryptamap serve` rendered a silent blank page. This
+  placeholder degrades LOUDLY instead: it tells the operator exactly how to
+  build the binary with the dashboard embedded.
+
+  scripts/release-build.sh additionally fails the release if this file's
+  src/href attributes point at asset files missing from the staged tree.
+-->
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <link rel="icon" type="image/svg+xml" href="/cryptamap.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>CryptaMap — Cryptographic Asset Compliance Dashboard</title>
-    <meta name="description" content="AWS Cryptographic Asset Discovery & CBOM Generation for Indian BFSI Compliance (SEBI / RBI / IRDAI)" />
-    <script type="module" crossorigin src="/assets/index-q3FQQfdj.js"></script>
-    <link rel="modulepreload" crossorigin href="/assets/react-p4mnUqr1.js">
-    <link rel="modulepreload" crossorigin href="/assets/cloudscape-DX9rnNGm.js">
-    <link rel="stylesheet" crossorigin href="/assets/cloudscape-wR9xhfM3.css">
-    <link rel="stylesheet" crossorigin href="/assets/index-BSUAbLbe.css">
+    <title>CryptaMap — dashboard not embedded</title>
   </head>
-  <body>
-    <div id="root"></div>
+  <body style="font-family: system-ui, sans-serif; max-width: 40rem; margin: 4rem auto; line-height: 1.5;">
+    <h1>CryptaMap: dashboard not embedded in this binary</h1>
+    <p>
+      This <code>cryptamap</code> binary was built with the committed placeholder
+      dashboard shell (a plain <code>go build</code>), so the web UI is not
+      available. Your scan output on disk is unaffected.
+    </p>
+    <p>
+      To build a binary with the full dashboard embedded, run
+      <code>make build-serve</code> from the repository root (it builds the
+      dashboard and stages <code>dashboard/dist</code> into
+      <code>cmd/cryptamap/webdist</code> before compiling), then re-run
+      <code>cryptamap serve</code>.
+    </p>
   </body>
 </html>

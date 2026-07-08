@@ -4,18 +4,16 @@ scan:
   mode: "on-demand"
   regions: []
   accounts: []
-  org_scanning:
-    enabled: false
-    role_name: "CryptaMapScannerRole"
-    management_account_id: ""
-    external_id: ""
+  # NOTE: org-wide cross-account scanning is NOT configured here. The deployed
+  # Step Functions fan-out passes the scanner role/externalId in the Lambda
+  # event (set at CDK deploy time); the CLI scan path is single-account only.
   concurrency:
     max_goroutines: 50
   rate_limiting:
     max_retries: 5
     base_delay_ms: 100
     max_delay_ms: 30000
-    jitter: true
+    # jitter is always applied by the engine and is not configurable.
   # NOTE: active TLS probing is intentionally NOT a scan option. CryptaMap's
   # evidence model is read-only: control-plane config inspection + passive
   # CloudTrail observation (tlsDetails.keyExchange). Active TLS handshakes against
@@ -23,14 +21,10 @@ scan:
   # the dormant prober in internal/probing is not wired in.
 
 output:
-  s3:
-    enabled: true
-    bucket_name: "cryptamap-results-${AWS_ACCOUNT_ID}"
-    prefix: "scans/"
-  dynamodb:
-    enabled: true
-    table_name: "CryptaMapScans"
-    retention_scans: 30
+  # NOTE: the S3/DynamoDB evidence-store writers (Lambda fan-out path) are
+  # configured via the RESULTS_BUCKET / SCANS_TABLE / RETENTION_DAYS environment
+  # variables set by the CDK, not via this file. The CLI path writes only to
+  # local_dir below.
   security_hub:
     # product_arn is stamped into the locally-written ASFF JSON findings; there
     # is no live BatchImportFindings push path.

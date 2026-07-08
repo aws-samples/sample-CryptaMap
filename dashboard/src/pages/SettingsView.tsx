@@ -15,10 +15,11 @@ cryptamap --mock --mock-scale 3 --regions ap-south-1,us-east-1 --org-merge --out
 
 # Live scan against the current account, then view it locally
 cryptamap --regions us-east-1 --output-dir ./out
-cryptamap serve ./out        # loopback-only dashboard over your REAL scan
+cryptamap serve --dir ./out  # loopback-only dashboard over your REAL scan
 
-# Org-wide scan (deployed Step Functions fan-out)
-cryptamap --org --regions ap-south-1`;
+# Org-wide scanning is NOT a CLI flag — it is the deployed Step Functions
+# fan-out stack (one scan per account). Merge the per-account CBOMs with:
+cryptamap org-merge-files --output-dir ./out`;
 
 export default function SettingsView() {
   const [cfg, setCfg] = useState<{
@@ -71,7 +72,7 @@ export default function SettingsView() {
             {demo && (
               <Box variant="small" color="text-status-warning">
                 You are viewing synthetic demo data. To see your own environment, run a
-                CryptaMap scan and open it with <code>cryptamap serve ./out</code> (or, for the
+                CryptaMap scan and open it with <code>cryptamap serve --dir ./out</code> (or, for the
                 deployed dashboard, set a real <code>apiBase</code> in <code>config.json</code>).
               </Box>
             )}

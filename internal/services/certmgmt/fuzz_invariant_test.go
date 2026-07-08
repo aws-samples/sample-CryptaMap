@@ -105,7 +105,7 @@ func (f *fuzzACMClient) DescribeCertificate(ctx context.Context, in *acm.Describ
 	if f.errResource {
 		return nil, certErrHostile
 	}
-	return &acm.DescribeCertificateOutput{}, nil // nil Certificate -> skipped
+	return &acm.DescribeCertificateOutput{}, nil // nil Certificate -> PostureUnknown asset emitted from the List summary (mirrors iot_certs)
 }
 
 // acmpca: ListCertificateAuthorities.
@@ -156,8 +156,10 @@ func TestFuzzCertScannerInvariants(t *testing.T) {
 	})
 
 	t.Run("perResourceError_neverFabricatesVerdict", func(t *testing.T) {
-		// acm DROPS a cert whose DescribeCertificate fails (continue); the property
-		// guarded is that no EMITTED cert is a fabricated verdict and no panic.
+		// acm EMITS a PostureUnknown asset (from the List summary) for a cert whose
+		// DescribeCertificate fails or returns a nil Certificate, mirroring iot_certs
+		// rather than dropping/skipping; the property guarded is that no EMITTED cert
+		// is a fabricated verdict and no panic.
 		certRunCase(t, "acm", "resErr", false, true, func() ([]models.CryptoAsset, error) {
 			return ACMScanner{}.scan(ctx, &fuzzACMClient{errResource: true}, acct, region)
 		})

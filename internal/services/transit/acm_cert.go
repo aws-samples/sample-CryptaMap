@@ -103,9 +103,15 @@ func (r *acmCertResolver) resolve(ctx context.Context, arn string) acmCertDetail
 // certificate's signature algorithm + key-size onto the asset's flat
 // cryptamap:* protocol-detail props (the panel reads cryptamap:certSignatureAlgorithm
 // / cryptamap:certKeySizeBits) AND the nested ProtocolProperties (so an in-memory
-// asset is complete before the CBOM writer flattens it). The value is stamped as
-// an AWS-doc/observed fact via StampObserved — it is read directly from the ACM
-// API, not inferred. No-op when the resolver is nil or the ARN is not ACM.
+// asset is complete before the CBOM writer flattens it).
+//
+// Provenance: the cert detail IS a live ACM observation, but it is only a
+// SUB-CLAIM of the asset — the asset's TLS posture may rest on a weaker basis
+// (a name-derived guess, an aws-doc fact, or nothing provable). So this stamps
+// ONLY additive cert-scoped provenance (certSource/certConfidence) and NEVER
+// writes the asset-level PropSource/PropConfidence: overwriting them with
+// "observed"/"high" would launder a guessed posture classification into a
+// verified one. No-op when the resolver is nil or the ARN is not ACM.
 func resolveACMCert(ctx context.Context, r *acmCertResolver, arn string, a *models.CryptoAsset) {
 	det := r.resolve(ctx, arn)
 	if !det.found {
@@ -130,6 +136,10 @@ func resolveACMCert(ctx context.Context, r *acmCertResolver, arn string, a *mode
 			cp.CertKeySizeBits = det.keyBits
 		}
 	}
-	// The cert detail is read live from ACM (observed), with high confidence.
-	services.StampObserved(a, "high")
+	// The cert detail is read live from ACM (observed, high confidence) — record
+	// that on the cert SUB-CLAIM only. Do NOT StampObserved the whole asset: the
+	// posture's own provenance (which may be a weaker/inferred basis set by the
+	// caller) must not be clobbered by a cert lookup.
+	a.Properties["certSource"] = services.SourceObserved
+	a.Properties["certConfidence"] = "high"
 }

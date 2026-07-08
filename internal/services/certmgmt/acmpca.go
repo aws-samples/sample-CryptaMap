@@ -33,18 +33,23 @@ func (ACMPCAScanner) Category() models.Category { return models.CategoryCertific
 // classical+PQC hybrid and performs NO key exchange, so a CA whose key is
 // ML_DSA_44/65/87 is pqc-ready, not pqc-hybrid. There is no ML_KEM key
 // algorithm for a CA (a CA key signs, it does not encapsulate), so that branch
-// is dead and removed. RSA / EC keys are classical; SM2 and any other value
-// fall through to the classical default.
+// is dead and removed. SM2 is a classical (elliptic-curve) algorithm, so it is
+// mapped explicitly. An unrecognized key algorithm (including the empty string
+// from a nil CertificateAuthorityConfiguration, or a future AWS PQC enum such
+// as an SLH-DSA/composite value) must NOT be silently labeled classical — that
+// would be a confident verdict on a field we could not classify (and a
+// quantum-vulnerable label on a PQC-safe CA if AWS ships a new PQC enum).
+// Mirrors acmPosture in acm.go: report Unknown.
 func acmpcaPosture(keyAlgo string) models.CryptoPosture {
 	a := strings.ToUpper(keyAlgo)
 	a = strings.ReplaceAll(a, "-", "_")
 	switch {
 	case strings.Contains(a, "ML_DSA"):
 		return models.PosturePQCReady
-	case strings.HasPrefix(a, "RSA"), strings.HasPrefix(a, "EC_"):
+	case strings.HasPrefix(a, "RSA"), strings.HasPrefix(a, "EC_"), strings.HasPrefix(a, "SM2"):
 		return models.PostureNonPQCClassical
 	}
-	return models.PostureNonPQCClassical
+	return models.PostureUnknown
 }
 
 // acmpcaAlgorithmProps builds an AlgorithmProperties block for an ACMPCA
@@ -80,7 +85,7 @@ type acmpcaAPI interface {
 }
 
 // Scan lists all ACMPCA Certificate Authorities and emits one asset per CA.
-// Pagination via NextToken; capped at 1000 items.
+// Pagination via NextToken; capped loudly at services.MaxAssetsPerScanner.
 func (s ACMPCAScanner) Scan(ctx context.Context, cfg aws.Config) ([]models.CryptoAsset, error) {
 	client := acmpca.NewFromConfig(cfg)
 	accountID := services.AccountID(ctx, cfg)
@@ -95,7 +100,6 @@ func (s ACMPCAScanner) Scan(ctx context.Context, cfg aws.Config) ([]models.Crypt
 // success.
 func (s ACMPCAScanner) scan(ctx context.Context, client acmpcaAPI, accountID, region string) ([]models.CryptoAsset, error) {
 	assets := []models.CryptoAsset{}
-	const maxItems = 1000
 	var nextToken *string
 	for {
 		out, err := client.ListCertificateAuthorities(ctx, &acmpca.ListCertificateAuthoritiesInput{NextToken: nextToken})
@@ -140,13 +144,20 @@ func (s ACMPCAScanner) scan(ctx context.Context, client acmpcaAPI, accountID, re
 				a.Properties["signingAlgorithm"] = sigAlgo
 			}
 			a.Properties["status"] = string(ca.Status)
-			services.PostureProperty(&a, acmpcaPosture(keyAlgo))
+			posture := acmpcaPosture(keyAlgo)
+			services.PostureProperty(&a, posture)
 			// The posture mapping is a universal AWS Private CA capability
 			// guarantee (ML-DSA = pure PQC signature; RSA/EC = classical),
-			// sourced from the supported-algorithms doc.
-			services.StampDocFactKeyed(&a, "certmgmt/acmpca/supported-key-algos")
+			// sourced from the supported-algorithms doc. The doc stamp is only
+			// attached when the algorithm actually matched that table: an
+			// unrecognized/empty key algorithm yields PostureUnknown, and
+			// stamping a doc citation on a verdict the doc does not back would
+			// fabricate provenance.
+			if posture != models.PostureUnknown {
+				services.StampDocFactKeyed(&a, "certmgmt/acmpca/supported-key-algos")
+			}
 			assets = append(assets, a)
-			if len(assets) >= maxItems {
+			if services.TruncationCapReached(len(assets), s.Name(), region) {
 				return assets, nil
 			}
 		}

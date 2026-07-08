@@ -112,6 +112,14 @@ type ProtocolProperties struct {
 	CertSignatureAlgorithm string `json:"certSignatureAlgorithm,omitempty"` // signature algorithm of the served leaf cert e.g. "sha256WithRSAEncryption"
 	CertKeySizeBits        int    `json:"certKeySizeBits,omitempty"`        // served cert public-key size in bits
 	Source                 string `json:"source,omitempty"`                 // provenance of the TLS classification: "observed" (real handshake/policy) | "aws-doc" (documented guarantee)
+	// DocConfidence / DocSourceURL carry the confidence tier and AWS doc URL
+	// backing an aws-doc-sourced TLS classification (Source=="aws-doc"), so a
+	// doc-derived verdict is auditable on the protocol block itself and not only
+	// via the asset-level StampDocFact properties. Like Source, they are
+	// non-schema provenance stripped from the emitted CycloneDX node
+	// (sanitizeForCDX) since protocolProperties is additionalProperties:false.
+	DocConfidence string `json:"docConfidence,omitempty"` // "high" | "medium" | "low" for an aws-doc TLS classification
+	DocSourceURL  string `json:"docSourceUrl,omitempty"`  // AWS doc URL backing an aws-doc TLS classification
 	// TLSMinVersion is the LOWEST TLS version the endpoint's policy permits (the
 	// negotiation FLOOR), distinct from Version which is the HIGHEST permitted.
 	// Sourced from the floor AWS exposes (ELB SslProtocols lowest entry, CloudFront
@@ -166,3 +174,22 @@ type CryptoAsset struct {
 	DiscoveredAt time.Time         `json:"discoveredAt"`
 	Properties   map[string]string `json:"properties,omitempty"` // free-form k/v from scanner
 }
+
+// IdentityKey returns the stable dedup identity for an asset. It prefers the
+// asset's own BomRef; when that is absent (e.g. a CBOM ingested from an
+// external tool omitted bom-refs) it falls back to the deterministic
+// ARN-derived ref, and as a last resort to a composite of
+// AccountID/Region/Service/ResourceID. The full ResourceID is used VERBATIM —
+// it may legitimately contain "/" (e.g. KMS "alias/aws/dynamodb") and is never
+// split or truncated — so two distinct slash-containing resources can never
+// collapse to a single identity during merge/dedup.
+func (a CryptoAsset) IdentityKey() string {
+	if a.BomRef != "" {
+		return a.BomRef
+	}
+	if a.ResourceARN != "" {
+		return BomRefForARN(a.ResourceARN)
+	}
+	return a.AccountID + "\x00" + a.Region + "\x00" + a.Service + "\x00" + a.ResourceID
+}
+

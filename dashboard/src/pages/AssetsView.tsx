@@ -163,6 +163,10 @@ export default function AssetsView() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Table preferences (page size) — held in state so the CollectionPreferences
+  // Confirm button actually takes effect (previously the control was inert).
+  const [prefs, setPrefs] = useState<{ pageSize?: number }>({ pageSize: 25 });
+
   const { items, allPageItems, collectionProps, propertyFilterProps, paginationProps, filteredItemsCount } =
     useCollection(rows, {
       propertyFiltering: {
@@ -173,7 +177,7 @@ export default function AssetsView() {
         defaultQuery: initialQuery,
       },
       sorting: { defaultState: { sortingColumn: ASSET_COLUMNS[6] } }, // posture, worst-first
-      pagination: { pageSize: 25 },
+      pagination: { pageSize: prefs.pageSize ?? 25 },
       selection: { trackBy: 'bomRef' },
     });
 
@@ -287,7 +291,8 @@ export default function AssetsView() {
       title="Preferences"
       confirmLabel="Confirm"
       cancelLabel="Cancel"
-      preferences={{ pageSize: 25 }}
+      preferences={prefs}
+      onConfirm={({ detail }) => setPrefs(detail)}
       pageSizePreference={{
         title: 'Page size',
         options: [

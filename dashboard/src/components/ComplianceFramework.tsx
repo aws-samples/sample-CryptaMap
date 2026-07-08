@@ -11,6 +11,7 @@ import Link from '@cloudscape-design/components/link';
 import Table from '@cloudscape-design/components/table';
 import KeyValuePairs from '@cloudscape-design/components/key-value-pairs';
 import { useScanData, summarizePosture, scanProvenance, realComponents } from '../hooks/useScanData';
+import { safeHref } from '../lib/posture';
 
 // ComplianceFramework renders a regulator page from a VERIFIED, dated data file
 // (public/compliance/<framework>.json) instead of hardcoded props. Every claim
@@ -44,6 +45,11 @@ interface Claim {
 }
 interface FrameworkData {
   framework: string;
+  /** True while the file is hand-authored MOCKUP/DESIGN data (not yet
+   *  generated/validated from the knowledge store). Renders a loud
+   *  non-authoritative banner so the mockup provenance is user-visible,
+   *  never hidden in the JSON _comment. */
+  draft?: boolean;
   title: string;
   asOf: string;
   verdict: string;
@@ -84,10 +90,22 @@ function CitationLine({ framework, docRef, c }: { framework: string; docRef: str
     c.page != null
       ? `p.${c.page}${c.line != null ? `, line ${c.line}` : ''}`
       : c.section ?? '';
+  // Runtime-fetched JSON is the same trust domain as the CBOM: gate the href
+  // through safeHref (http/https only) like every other scan-derived link, so a
+  // javascript: URL in a compliance file never becomes a clickable sink.
+  const href = safeHref(c.url);
   return (
     <Box variant="small" color="text-body-secondary">
       Source: {framework} {docRef} · <code>{c.sourceFile}</code>
-      {loc ? ` · ${loc}` : ''} · <Link href={c.url} external>verify at source</Link>
+      {loc ? ` · ${loc}` : ''}
+      {href ? (
+        <>
+          {' · '}
+          <Link href={href} external>
+            verify at source
+          </Link>
+        </>
+      ) : null}
     </Box>
   );
 }
@@ -133,8 +151,22 @@ export default function ComplianceFramework({ dataPath }: { dataPath: string }) 
   return (
     <ContentLayout header={<Header variant="h1" description={data.summary}>{data.title}</Header>}>
       <SpaceBetween size="l">
+        {/* Draft/mockup provenance banner — the shipped compliance JSON is
+            hand-authored design data until it is generated/validated from the
+            knowledge store. This must be USER-VISIBLE, not buried in the JSON
+            _comment: a regulator-facing page must never present draft claims
+            as validated runtime truth. */}
+        {data.draft && (
+          <Alert type="warning" header="Draft content — not validated compliance guidance">
+            The regulatory claims on this page are hand-authored draft/design data
+            (quotes cited to public regulator documents, dated {data.asOf}) and have
+            not been generated or validated from a maintained knowledge store.
+            Verify every claim against the linked primary source before relying on
+            it for a compliance decision.
+          </Alert>
+        )}
         {/* Honest provenance banner — what we hold and as-of when. */}
-        <Alert type="info" header={`Primary documents held · verified as of ${data.asOf}`}>
+        <Alert type="info" header={`Primary documents held · ${data.draft ? 'draft, cited' : 'verified'} as of ${data.asOf}`}>
           Every claim below is quoted verbatim from an official document we hold a copy of. CryptaMap is
           an evidence tool, not a compliance certification — the obligation and its assessment remain yours.
         </Alert>
@@ -179,11 +211,16 @@ export default function ComplianceFramework({ dataPath }: { dataPath: string }) 
               {
                 id: 'src',
                 header: 'Source',
-                cell: (d: HeldDoc) => (
-                  <Link href={d.url} external>
-                    {hostOf(d.url)}
-                  </Link>
-                ),
+                cell: (d: HeldDoc) =>
+                  // safeHref: never render a non-http(s) URL from runtime JSON as
+                  // an active link (matches the roadmap sourceUrl standard).
+                  safeHref(d.url) ? (
+                    <Link href={safeHref(d.url)} external>
+                      {hostOf(d.url)}
+                    </Link>
+                  ) : (
+                    hostOf(d.url)
+                  ),
               },
             ]}
             items={data.documentsHeld}
@@ -191,7 +228,7 @@ export default function ComplianceFramework({ dataPath }: { dataPath: string }) 
           />
         </Container>
 
-        <Container header={<Header variant="h2" counter={`(${data.claims.length})`}>Verified obligations & how CryptaMap maps to them</Header>}>
+        <Container header={<Header variant="h2" counter={`(${data.claims.length})`}>{data.draft ? 'Obligations (draft — unvalidated)' : 'Verified obligations'} & how CryptaMap maps to them</Header>}>
           <SpaceBetween size="l">
             {data.claims.map((c) => (
               <Container

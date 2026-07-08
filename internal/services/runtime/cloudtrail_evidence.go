@@ -402,10 +402,13 @@ func (s CloudTrailEvidenceScanner) scan(ctx context.Context, client cloudTrailEv
 			tlsSeen[dedupKey] = struct{}{}
 
 			posture, confidence, _ := tlsObservedPosture(t)
+			// Use ONLY the tlsVersion the event actually carried. A missing
+			// tlsVersion must NOT be defaulted to "1.3": a classical named group
+			// (x25519/secp256r1) is negotiable under TLS 1.2 too, so the presence
+			// of a keyExchange does not imply 1.3, and this asset class is stamped
+			// source=observed — inventing a version here would be fabricated
+			// evidence in the strongest evidence tier. Leave it empty (unknown).
 			ver := t.tlsVersion
-			if ver == "" {
-				ver = "1.3"
-			}
 			// Surface the OBSERVED key-exchange group + PQ-hybrid flag onto the
 			// protocol block so the dashboard's "Key exchange group" / "PQC hybrid
 			// key exchange" rows render the real handshake evidence. This is the one

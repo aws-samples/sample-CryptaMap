@@ -1,4 +1,4 @@
-.PHONY: build build-cli build-cdk build-dashboard build-serve release test mock integration deploy synth clean lint lint-terms generate-types check-types generate-knowledge check-knowledge generate-policy check-policy
+.PHONY: build build-cli build-cdk build-dashboard build-serve release test mock integration deploy synth clean lint lint-terms generate-types check-types generate-knowledge check-knowledge generate-policy check-policy third-party-notices
 
 GOPACKAGES = ./internal/... ./pkg/... ./cmd/...
 DIST       = ./dist
@@ -36,8 +36,33 @@ build-serve: build-dashboard ## Build the CLI with the real dashboard embedded f
 	go build -o $(DIST)/cryptamap ./cmd/cryptamap
 	@echo "Built $(DIST)/cryptamap with the dashboard embedded. Bundled /mock data is the SYNTHETIC demo (mode=mock); real-data *.local.json is stripped by the leak guard. NOTE: cmd/cryptamap/webdist is staged build output (gitignored); the committed placeholder keeps plain 'go build' working."
 
-release: ## Cross-compile signed-ready air-gap release binaries into dist/release
+release: third-party-notices ## Cross-compile signed-ready air-gap release binaries into dist/release
 	bash scripts/release-build.sh
+
+# THIRD-PARTY-NOTICES.md in the repo root is a hand-authored SUMMARY of the major
+# direct dependencies (see the file header). The authoritative, complete report of
+# EVERY transitive dependency and its license is regenerated at release time by the
+# recipe below, which requires license tooling that is NOT installed in this repo:
+#   - go-licenses:      go install github.com/google/go-licenses@latest
+#   - license-checker:  npm install -g license-checker
+# The recipe is intentionally guarded so a plain `make release` does not fail when the
+# tooling is absent; it prints guidance and leaves the committed summary in place.
+third-party-notices: ## Regenerate THIRD-PARTY-NOTICES.md from license tooling (release-time; requires go-licenses + license-checker)
+	@if command -v go-licenses >/dev/null 2>&1 && (cd dashboard && npx --no-install license-checker --version >/dev/null 2>&1); then \
+		echo "# Third-Party Notices (generated)" > THIRD-PARTY-NOTICES.generated.md; \
+		echo "\n## Go modules\n" >> THIRD-PARTY-NOTICES.generated.md; \
+		go-licenses report ./... 2>/dev/null >> THIRD-PARTY-NOTICES.generated.md; \
+		echo "\n## npm (dashboard, production)\n" >> THIRD-PARTY-NOTICES.generated.md; \
+		(cd dashboard && npx license-checker --production --csv) >> ../THIRD-PARTY-NOTICES.generated.md; \
+		echo "\n## npm (cdk, production)\n" >> THIRD-PARTY-NOTICES.generated.md; \
+		(cd cdk && npx license-checker --production --csv) >> ../THIRD-PARTY-NOTICES.generated.md; \
+		echo "Wrote THIRD-PARTY-NOTICES.generated.md — review, then replace THIRD-PARTY-NOTICES.md."; \
+	else \
+		echo "NOTE: go-licenses and/or license-checker not installed; skipping full regeneration."; \
+		echo "      Install them to regenerate, or keep the hand-authored THIRD-PARTY-NOTICES.md summary."; \
+		echo "        go install github.com/google/go-licenses@latest"; \
+		echo "        npm install -g license-checker"; \
+	fi
 
 generate-knowledge: ## Regenerate the embedded PQC knowledge JSON from the Go literals
 	go run ./cmd/gen-knowledge
@@ -80,11 +105,16 @@ scan: build-cli ## Run a live scan in the configured AWS account/region
 synth: build-cdk ## CDK synth (no deploy)
 	cd cdk && npx cdk synth
 
+# In CI (CI=1) skip the interactive prompts; interactively (default) keep the
+# approval / confirmation gates so IAM changes and teardowns are not silent.
+DEPLOY_FLAGS := $(if $(filter 1,$(CI)),--require-approval never,)
+DESTROY_FLAGS := $(if $(filter 1,$(CI)),--force,)
+
 deploy: build-lambda build-cdk build-dashboard ## CDK deploy to current AWS account
-	cd cdk && npx cdk deploy --all --require-approval never
+	cd cdk && npx cdk deploy --all $(DEPLOY_FLAGS)
 
 destroy: ## Tear down CryptaMap CDK stacks (DESTRUCTIVE)
-	cd cdk && npx cdk destroy --all --force
+	cd cdk && npx cdk destroy --all $(DESTROY_FLAGS)
 
 clean: ## Remove build artefacts
 	rm -rf $(DIST) cdk/cdk.out dashboard/dist

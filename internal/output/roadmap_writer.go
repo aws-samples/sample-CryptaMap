@@ -62,13 +62,25 @@ func WriteRoadmapMarkdownTopN(w io.Writer, scan models.ScanResult, topN int) err
 // writeRoadmapMarkdownTopN renders an already-built roadmap as markdown. Callers
 // that emit multiple roadmap artifacts in one run should call roadmap.Build
 // once and reuse the result instead of rebuilding over the full asset set.
-func writeRoadmapMarkdownTopN(w io.Writer, rm roadmap.Roadmap, topN int) error {
+func writeRoadmapMarkdownTopN(dst io.Writer, rm roadmap.Roadmap, topN int) error {
 	if topN <= 0 {
 		topN = defaultRoadmapTopN
 	}
 
-	if _, err := fmt.Fprintf(w, "# CryptaMap PQC Migration Roadmap\n\n"); err != nil {
-		return err
+	// Route all writes through errWriter so a mid-stream failure (full disk,
+	// closed pipe) after the first line is propagated instead of swallowed.
+	ew := &errWriter{w: dst}
+	var w io.Writer = ew
+	fmt.Fprintf(w, "# CryptaMap PQC Migration Roadmap\n\n")
+	// Loud-incomplete banner: if this roadmap was rendered from a partial-coverage
+	// org merge, say so at the very top so a regulator reading only this report is
+	// not misled into treating a decimated scan as complete (mirrors the CBOM's
+	// cryptamap:incomplete metadata stamp).
+	if rm.Coverage != nil && rm.Coverage.Incomplete {
+		fmt.Fprintf(w, "> ⚠️ **INCOMPLETE COVERAGE** — this roadmap was generated from a partial org scan: "+
+			"%d of %d expected shards observed, %d missing, %d failed. Findings below reflect only the "+
+			"accounts/regions that were successfully scanned; absence of an item is NOT evidence of safety.\n\n",
+			rm.Coverage.ObservedShards, rm.Coverage.ExpectedShards, rm.Coverage.MissingShards, rm.Coverage.FailedShards)
 	}
 	fmt.Fprintf(w, "Ranked \"upgrade these to PQC first\" list, derived from web-verified AWS\n")
 	fmt.Fprintf(w, "post-quantum support (as of **%s**) cross-referenced with each finding's\n", rm.AsOf)
@@ -129,7 +141,7 @@ func writeRoadmapMarkdownTopN(w io.Writer, rm roadmap.Roadmap, topN int) error {
 	}
 	fmt.Fprintf(w, "\n")
 
-	return nil
+	return ew.err
 }
 
 // mdCell sanitizes a value for a markdown table cell: it escapes pipes and

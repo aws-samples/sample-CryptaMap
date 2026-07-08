@@ -22,6 +22,59 @@ import (
 // protecting a Lambda shard. Override per scanner only with good reason.
 const MaxAssetsPerScanner = 25000
 
+// TruncationSentinel is the machine-readable prefix of the ServiceScanReport
+// Errors entry the engine appends when a scanner's results were truncated at a
+// cap (MaxAssetsPerScanner or EngineOptions.PerServiceCap). Structured consumers
+// (CBOM metadata stamping, the dashboard, org merge) match on this prefix to
+// distinguish "results incomplete: truncated" from an ordinary scanner error,
+// instead of relying on the human-only stderr warning.
+const TruncationSentinel = "cryptamap:truncated"
+
+// truncatedScanners records, process-wide, the scanners that hit
+// MaxAssetsPerScanner during the current scan. TruncationCapReached (called deep
+// inside scanner pagination loops, which return `assets, nil` — no error flows
+// back) sets the mark; the engine consumes it per scanner via TakeTruncated and
+// folds it into the ServiceScanReport so truncation is machine-readable, not
+// stderr-only. Guarded by a mutex because scanners run concurrently.
+var (
+	truncatedMu       sync.Mutex
+	truncatedScanners = map[string]struct{}{}
+)
+
+func markTruncated(scanner string) {
+	truncatedMu.Lock()
+	defer truncatedMu.Unlock()
+	truncatedScanners[scanner] = struct{}{}
+}
+
+// UnmarkTruncated clears any process-global truncation mark for the named
+// scanner. It exists to defuse a stale-mark edge in the retry path: attempt 1
+// can hit the cap (markTruncated) and THEN fail with an error, so the engine
+// never reaches TakeTruncated for that attempt; a retry that succeeds UNDER the
+// cap would otherwise inherit the stale mark and mislabel a complete result as
+// truncated. A fresh scan attempt (or a successful under-cap scan) calls this to
+// start clean. Idempotent and thread-safe (shares truncatedMu); a no-op when the
+// scanner is not currently marked.
+func UnmarkTruncated(scanner string) {
+	truncatedMu.Lock()
+	defer truncatedMu.Unlock()
+	delete(truncatedScanners, scanner)
+}
+
+// TakeTruncated reports whether the named scanner hit MaxAssetsPerScanner since
+// the last call, and CLEARS the mark (consume-on-read) so a later scan in the
+// same process (retry, another shard, tests) starts clean. The engine calls it
+// once per scanner right after Scan returns.
+func TakeTruncated(scanner string) bool {
+	truncatedMu.Lock()
+	defer truncatedMu.Unlock()
+	_, ok := truncatedScanners[scanner]
+	if ok {
+		delete(truncatedScanners, scanner)
+	}
+	return ok
+}
+
 // TruncationCapReached reports whether a scanner has hit MaxAssetsPerScanner and,
 // when it has, logs a LOUD warning to stderr exactly once-per-call-site so the cap
 // is never silent (silent truncation = under-reported crypto assets = a false
@@ -32,17 +85,44 @@ const MaxAssetsPerScanner = 25000
 //	    return assets, nil
 //	}
 //
-// The companion cryptamap:truncated property should also be stamped on the shard's
-// assets by the engine when this fires; for now the stderr signal + ServiceStats
-// error surfacing is the operator-visible trail.
+// Besides the stderr warning it marks the scanner as truncated (markTruncated);
+// the engine consumes that mark (TakeTruncated) and appends a TruncationSentinel
+// entry to the scanner's ServiceScanReport.Errors, which the CBOM writer folds
+// into the cryptamap:truncated metadata property — so truncation is visible to
+// structured consumers, not just operators tailing stderr.
 func TruncationCapReached(count int, scanner, region string) bool {
 	if count >= MaxAssetsPerScanner {
 		fmt.Fprintf(os.Stderr,
 			"[scanner:%s] WARNING: hit MaxAssetsPerScanner=%d in region %s; results TRUNCATED — this account/region has more resources than the per-scanner cap and the CBOM under-reports. Raise services.MaxAssetsPerScanner or shard finer.\n",
 			scanner, MaxAssetsPerScanner, region)
+		markTruncated(scanner)
 		return true
 	}
 	return false
+}
+
+// CapAndWarn enforces the per-scanner asset cap on a fully-collected slice in one
+// line, closing the mid-/final-page silent-truncation edge that a bare
+// `items[:cap]` leaves open: slicing to the cap without warning drops the excess
+// silently (under-reported crypto assets = a false "all clear"). If len(items) is
+// within cap it returns items unchanged; otherwise it slices to cap AND routes
+// through TruncationCapReached(len(items), scanner, region) so the LOUD stderr
+// warning fires and the scanner is marked truncated (machine-readable via
+// TakeTruncated). cap<=0 is treated as MaxAssetsPerScanner. Adopt at any callsite
+// that currently does `return items[:cap], nil`:
+//
+//	return services.CapAndWarn(items, services.MaxAssetsPerScanner, s.Name(), region), nil
+func CapAndWarn[T any](items []T, cap int, scanner, region string) []T {
+	if cap <= 0 {
+		cap = MaxAssetsPerScanner
+	}
+	if len(items) <= cap {
+		return items
+	}
+	// TruncationCapReached fires on count >= MaxAssetsPerScanner; call it so the
+	// warning + mark happen for the actual overflow count, then enforce the cap.
+	TruncationCapReached(len(items), scanner, region)
+	return items[:cap]
 }
 
 // bomRefFromARN derives a stable bom-ref from a resource ARN. It delegates to
@@ -364,13 +444,18 @@ func TLSProtocolProps(version, suiteName string) models.CryptoProperties {
 // TLSProtocolPropsDoc is TLSProtocolProps for a TLS posture that rests on an
 // AWS-DOCUMENTED guarantee rather than a live-observed handshake/policy (e.g. a
 // managed endpoint whose TLS floor AWS documents but no per-resource API exposes).
-// It records source=aws-doc on the protocol block; the caller should also
-// StampDocFact the asset with the same confidence/URL/asOf. An empty version
-// means the floor is not a universal guarantee and is left UNKNOWN (do not assert
-// a version that isn't documented as universal).
+// It records source=aws-doc on the protocol block AND the backing confidence +
+// doc URL (mirroring how Source is stamped) so the doc-derived verdict is
+// self-describing even if a caller forgets the asset-level StampDocFact; the
+// caller should still StampDocFact the asset with the same confidence/URL/asOf so
+// the freshness surface and dashboard citation resolve. An empty version means
+// the floor is not a universal guarantee and is left UNKNOWN (do not assert a
+// version that isn't documented as universal).
 func TLSProtocolPropsDoc(version, suiteName, confidence, docURL string) models.CryptoProperties {
 	cp := TLSProtocolProps(version, suiteName)
 	cp.ProtocolProperties.Source = SourceAWSDoc
+	cp.ProtocolProperties.DocConfidence = confidence
+	cp.ProtocolProperties.DocSourceURL = docURL
 	return cp
 }
 

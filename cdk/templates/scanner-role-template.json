@@ -1,6 +1,6 @@
 {
   "AWSTemplateFormatVersion": "2010-09-09",
-  "Description": "CryptaMap member-account scanner role. Deployed to every account in your AWS Organization (e.g. o-exampleorgid) via a SERVICE_MANAGED StackSet (AutoDeployment + ManagedExecution.Active=true) targeting your org root (e.g. r-exam). Creates a read-only role with a CUSTOM least-privilege inline policy (NOT the broad AWS-managed ReadOnlyAccess): exactly the per-resource crypto-detail READ actions the CryptaMap scanners require (kms:DescribeKey, acm:DescribeCertificate, iam:GetServerCertificate, elasticloadbalancing:DescribeListeners, etc.). The CryptaMapScannerReadActions inline policy is GENERATED from the single source of truth in cmd/gen-policy/main.go via 'make generate-policy' (CI 'make check-policy' fails on drift) — do not hand-edit its Action array. The CryptaMap orchestrator role in the Audit account assumes this role to run per-(account,region) crypto-asset scans. The trust policy is gated by aws:PrincipalOrgID + ExternalId so only the orchestrator inside this organization can assume it. NOTHING in this template grants write access — the 3 resource-scoped writes (s3:PutObject, dynamodb:PutItem, securityhub:BatchImportFindings) live ONLY on the orchestrator role in the Audit account.",
+  "Description": "CryptaMap member-account scanner role. Deployed to every account in your AWS Organization (e.g. o-exampleorgid) via a SERVICE_MANAGED StackSet (AutoDeployment + ManagedExecution.Active=true) targeting your org root (e.g. r-exam). Creates a read-only role with a CUSTOM least-privilege inline policy (NOT the broad AWS-managed ReadOnlyAccess): exactly the per-resource crypto-detail READ actions the CryptaMap scanners require (kms:DescribeKey, acm:DescribeCertificate, iam:GetServerCertificate, elasticloadbalancing:DescribeListeners, etc.). The CryptaMapScannerReadActions inline policy is GENERATED from the single source of truth in cmd/gen-policy/main.go via 'make generate-policy' (CI 'make check-policy' fails on drift) — do not hand-edit its Action array. The CryptaMap orchestrator role in the Audit account assumes this role to run per-(account,region) crypto-asset scans. The trust policy is gated by aws:PrincipalOrgID + ExternalId so only the orchestrator inside this organization can assume it. NOTHING in this template grants write access — the resource-scoped writes (s3:PutObject, dynamodb:PutItem) live ONLY on the orchestrator role in the Audit account.",
   "Outputs": {
     "ScannerRoleArn": {
       "Description": "ARN of the CryptaMap scanner role created in this member account.",
@@ -21,7 +21,7 @@
   "Parameters": {
     "ExternalId": {
       "Default": "cryptamap-scanner",
-      "Description": "Additional confused-deputy guard layered on top of aws:PrincipalOrgID. The orchestrator must pass this exact ExternalId on sts:AssumeRole. Override per deployment for stronger isolation.",
+      "Description": "Additional confused-deputy guard layered on top of aws:PrincipalOrgID. The orchestrator must pass this exact ExternalId on sts:AssumeRole. WARNING: the default value 'cryptamap-scanner' is committed to a public repository, so it provides ZERO secrecy — it is a demo placeholder only, and NoEcho merely hides it in the console. The real trust gates are aws:PrincipalOrgID + the exact orchestrator role ARN. Always override with a private, unguessable value per deployment (the CDK app refuses org deployments that keep this default).",
       "NoEcho": true,
       "Type": "String"
     },
@@ -127,6 +127,7 @@
                     "secretsmanager:ListSecrets",
                     "elasticache:DescribeReplicationGroups",
                     "redshift:DescribeClusters",
+                    "redshift:DescribeClusterParameters",
                     "quicksight:DescribeKeyRegistration",
                     "profile:ListDomains",
                     "profile:GetDomain",
@@ -205,6 +206,7 @@
                     "elasticloadbalancing:DescribeLoadBalancers",
                     "elasticloadbalancing:DescribeListeners",
                     "elasticloadbalancing:DescribeSSLPolicies",
+                    "elasticloadbalancing:DescribeLoadBalancerPolicies",
                     "vpc-lattice:ListServices",
                     "vpc-lattice:GetService",
                     "vpc-lattice:ListListeners",
@@ -217,6 +219,7 @@
                     "transfer:DescribeSecurityPolicy",
                     "directconnect:DescribeConnections",
                     "lambda:ListFunctions",
+                    "lambda:ListFunctionUrlConfigs",
                     "appsync:ListGraphqlApis",
                     "ds:DescribeDirectories",
                     "ds:DescribeLDAPSSettings",

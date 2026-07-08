@@ -2,12 +2,14 @@ package datarest
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/timestreamwrite"
+	"github.com/aws/smithy-go"
 
 	"github.com/aws-samples/cryptamap/internal/services"
 	"github.com/aws-samples/cryptamap/pkg/models"
@@ -18,15 +20,25 @@ import (
 // service is opt-in / being deprecated to new customers). This is a "service not
 // in use" signal, NOT a permission defect or a scan failure, so it is treated as
 // a graceful skip (zero assets, nil error) — mirroring the QLDB retired-endpoint
-// skip. A GENUINE AccessDenied for an account that DOES use Timestream lacks this
-// specific message and still surfaces as a hard error.
+// skip.
+//
+// The predicate deliberately requires BOTH the typed API error (a
+// smithy.APIError with code AccessDeniedException) AND the exact documented
+// "Only existing Timestream" service message. A looser substring match (e.g.
+// any error mentioning "AccessDenied" and "LiveAnalytics") would also swallow
+// GENUINE IAM/SCP denials for accounts that DO use Timestream — silently
+// dropping their whole inventory as a clean empty success. Those must still
+// surface as hard errors.
 func isTimestreamNotSubscribed(err error) bool {
 	if err == nil {
 		return false
 	}
-	msg := err.Error()
-	return strings.Contains(msg, "Only existing Timestream") ||
-		(strings.Contains(msg, "AccessDenied") && strings.Contains(msg, "LiveAnalytics"))
+	var apiErr smithy.APIError
+	if !errors.As(err, &apiErr) {
+		return false
+	}
+	return apiErr.ErrorCode() == "AccessDeniedException" &&
+		strings.Contains(apiErr.ErrorMessage(), "Only existing Timestream")
 }
 
 // TimestreamScanner inspects Timestream databases for KMS encryption.

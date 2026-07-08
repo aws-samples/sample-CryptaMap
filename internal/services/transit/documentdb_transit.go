@@ -9,6 +9,7 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/docdb"
+	docdbtypes "github.com/aws/aws-sdk-go-v2/service/docdb/types"
 
 	"github.com/aws-samples/cryptamap/internal/services"
 	"github.com/aws-samples/cryptamap/pkg/models"
@@ -58,7 +59,18 @@ func (s DocumentDBTransitScanner) scan(ctx context.Context, client docdbTransitA
 	assets := []models.CryptoAsset{}
 	var marker *string
 	for {
-		out, err := client.DescribeDBClusters(ctx, &docdb.DescribeDBClustersInput{Marker: marker})
+		// DescribeDBClusters hits the SHARED RDS control plane, which returns
+		// RDS/Aurora/Neptune/DocumentDB clusters alike. Filter server-side to
+		// docdb engines only so DocumentDB's TLS verdict is never stamped onto a
+		// foreign (e.g. Aurora or Neptune) cluster — that would be a fabricated
+		// verdict for an engine this scanner never inspected.
+		out, err := client.DescribeDBClusters(ctx, &docdb.DescribeDBClustersInput{
+			Filters: []docdbtypes.Filter{{
+				Name:   aws.String("engine"),
+				Values: []string{"docdb"},
+			}},
+			Marker: marker,
+		})
 		if err != nil {
 			return nil, fmt.Errorf("documentdb_transit DescribeDBClusters: %w", err)
 		}
@@ -71,6 +83,13 @@ func (s DocumentDBTransitScanner) scan(ctx context.Context, client docdbTransitA
 		}
 		for _, c := range out.DBClusters {
 			if c.DBClusterIdentifier == nil {
+				continue
+			}
+			// Defence in depth behind the server-side engine filter above: if the
+			// control plane still returns a non-docdb (or engine-less) cluster,
+			// skip it rather than stamping DocumentDB's TLS verdict on a foreign
+			// engine. The engine-specific scanner for that cluster covers it.
+			if c.Engine == nil || !strings.EqualFold(*c.Engine, "docdb") {
 				continue
 			}
 			// Join the CA-cert info discovered from the cluster's instances. The

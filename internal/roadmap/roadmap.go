@@ -78,11 +78,15 @@ type AccountRollup struct {
 // Roadmap is the full ranked roadmap: the descending-priority item list plus the
 // per-service and per-account roll-ups.
 type Roadmap struct {
-	AsOf          string          `json:"asOf"`
-	GeneratedFrom string          `json:"generatedFrom"` // merged AccountID (e.g. "org")
-	Items         []RoadmapItem   `json:"items"`         // ranked descending
-	ByService     []ServiceRollup `json:"byService"`
-	ByAccount     []AccountRollup `json:"byAccount"`
+	AsOf          string                `json:"asOf"`
+	GeneratedFrom string                `json:"generatedFrom"` // merged AccountID (e.g. "org")
+	Items         []RoadmapItem         `json:"items"`         // ranked descending
+	ByService     []ServiceRollup       `json:"byService"`
+	ByAccount     []AccountRollup       `json:"byAccount"`
+	// Coverage mirrors the org-merge completion barrier (nil for a single scan),
+	// so a regulator handed only the roadmap — like the CBOM — can tell a
+	// partial-coverage org scan from a clean one. Populated from scan.Coverage.
+	Coverage *models.MergeCoverage `json:"coverage,omitempty"`
 }
 
 // Build is the pure entrypoint: it produces one RoadmapItem per Finding, scores
@@ -147,6 +151,7 @@ func Build(scan models.ScanResult) Roadmap {
 	rm := Roadmap{
 		AsOf:          pqc.AsOf,
 		GeneratedFrom: scan.AccountID,
+		Coverage:      scan.Coverage, // nil for a single scan; set on org merges
 	}
 	rm.Items = items
 	rankAndRoll(&rm)

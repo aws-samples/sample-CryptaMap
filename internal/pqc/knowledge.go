@@ -8,6 +8,7 @@ import (
 	"os"
 	"sort"
 	"sync"
+	"time"
 )
 
 // Knowledge-as-data layer (task #35, Phase 1).
@@ -186,6 +187,12 @@ func (k Knowledge) validate() error {
 	if k.KnowledgeVersion == "" {
 		return fmt.Errorf("missing knowledgeVersion")
 	}
+	// KnowledgeVersion precedence is a string compare, which is only meaningful
+	// for the documented YYYY-MM-DD format — without this check an arbitrary
+	// string like "zzz" or "9999" would lexicographically outrank any real date.
+	if _, terr := time.Parse("2006-01-02", k.KnowledgeVersion); terr != nil {
+		return fmt.Errorf("knowledgeVersion %q is not a YYYY-MM-DD date", k.KnowledgeVersion)
+	}
 	if len(k.ServiceMatrix) == 0 {
 		return fmt.Errorf("empty serviceMatrix")
 	}
@@ -277,9 +284,11 @@ func loadKnowledge() {
 		}
 		// Verify the override's self-declared digest against a recomputation over
 		// its own fact sections (same canonicalization the baseline digest uses).
-		// A mismatch means the content was altered after the digest was stamped
-		// (or the digest was forged) — fail closed: log + ignore, embedded stands.
-		// A tampered override must never silently replace crypto facts.
+		// A mismatch means the content was altered after the digest was stamped —
+		// fail closed: ignore, embedded stands. NOTE: this is CORRUPTION detection
+		// (integrity), NOT authenticity — whoever can write the file can also
+		// stamp a consistent digest. Authenticity requires a signature (Phase 4);
+		// until then the override path must only be writable by trusted tooling.
 		if got := ov.computeDigest(); got != ov.Digest {
 			loadedProv.OverrideError = fmt.Sprintf("digest mismatch: declared %q, recomputed %q", ov.Digest, got)
 			return

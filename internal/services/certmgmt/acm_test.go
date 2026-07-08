@@ -138,10 +138,10 @@ func TestACMScanListErrorPropagates(t *testing.T) {
 }
 
 // TestACMScanDescribeErrorDoesNotAbortScan verifies that a per-certificate
-// DescribeCertificate failure does NOT abort the whole scan or silently corrupt
-// it: the bad cert is skipped (logged to stderr) while the healthy certs in the
-// same page are still emitted. This is a deliberate per-resource continue, not a
-// silent drop of the entire scan.
+// DescribeCertificate failure does NOT abort the whole scan AND does NOT
+// silently drop the cert: it is still emitted from its List summary with
+// PostureUnknown (visible and honestly unclassified, mirroring iot_certs),
+// while the healthy certs in the same page keep their full classification.
 func TestACMScanDescribeErrorDoesNotAbortScan(t *testing.T) {
 	client := &fakeACMClient{
 		listPages: []*acm.ListCertificatesOutput{
@@ -166,8 +166,15 @@ func TestACMScanDescribeErrorDoesNotAbortScan(t *testing.T) {
 	if acmAssetByID(assets, "arn:cert-good") == nil {
 		t.Error("expected healthy cert to still be emitted despite sibling DescribeCertificate failure")
 	}
-	if acmAssetByID(assets, "arn:cert-bad") != nil {
-		t.Error("cert whose DescribeCertificate failed should be skipped, not emitted with bogus data")
+	bad := acmAssetByID(assets, "arn:cert-bad")
+	if bad == nil {
+		t.Fatal("cert whose DescribeCertificate failed must still be emitted with PostureUnknown, not silently dropped (a denied Describe pass would otherwise look like a zero-ACM account)")
+	}
+	if got := bad.Properties["posture"]; got != string(models.PostureUnknown) {
+		t.Errorf("describe-failed cert posture = %q, want %q (never a fabricated classification)", got, models.PostureUnknown)
+	}
+	if got := bad.Properties["source"]; got != "" {
+		t.Errorf("describe-failed cert must carry no provenance stamp (nothing was observed), got source=%q", got)
 	}
 }
 

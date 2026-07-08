@@ -10,10 +10,10 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
-	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 
 	"github.com/aws-samples/cryptamap/internal/merge"
 	"github.com/aws-samples/cryptamap/pkg/models"
@@ -257,12 +257,13 @@ func runMergeAccountMode(ctx context.Context, baseCfg aws.Config, runID, account
 		return LambdaResponse{}, fmt.Errorf("merge-account mode: marshal %s: %w", accountID, merr)
 	}
 	key := accountMergedKey(runID, accountID)
+	// No explicit ServerSideEncryption: uploads inherit the bucket's default
+	// encryption configuration (e.g. the bucket's CMK).
 	if _, perr := client.PutObject(ctx, &s3.PutObjectInput{
-		Bucket:               aws.String(bucket),
-		Key:                  aws.String(key),
-		Body:                 bytes.NewReader(body),
-		ContentType:          aws.String("application/json"),
-		ServerSideEncryption: types.ServerSideEncryptionAes256,
+		Bucket:      aws.String(bucket),
+		Key:         aws.String(key),
+		Body:        bytes.NewReader(body),
+		ContentType: aws.String("application/json"),
 	}); perr != nil {
 		return LambdaResponse{}, fmt.Errorf("merge-account mode: put %s: %w", key, perr)
 	}
@@ -297,7 +298,7 @@ func runMergeAccountMode(ctx context.Context, baseCfg aws.Config, runID, account
 //
 // All I/O uses the central base config (the orchestrator's own credentials),
 // never an assumed member-account role.
-func runMergeMode(ctx context.Context, baseCfg aws.Config, runID string, expectedShards int) (LambdaResponse, error) {
+func runMergeMode(ctx context.Context, baseCfg aws.Config, runID string, expectedShards int, regionDiscoveryFailed []string) (LambdaResponse, error) {
 	bucket := os.Getenv("RESULTS_BUCKET")
 	if bucket == "" {
 		return LambdaResponse{}, fmt.Errorf("merge mode: RESULTS_BUCKET not set")
@@ -335,7 +336,15 @@ func runMergeMode(ctx context.Context, baseCfg aws.Config, runID string, expecte
 	// missing/corrupt is recorded (not aborted on) above. Surface it LOUDLY and
 	// thread it into the summary so the org report is flagged incomplete with the
 	// SPECIFIC missing accounts — never a silently-decimated "success".
-	acctBarrier := accountBarrier{expectedAccounts: listed, missingAccounts: missingAccounts}
+	acctBarrier := accountBarrier{
+		expectedAccounts: listed,
+		missingAccounts:  missingAccounts,
+		// Region-discovery barrier (docs/SCALING.md §6 Bug B): seed-reported
+		// accounts whose enabled-region enumeration failed (scanned over fallback
+		// regions only). buildMergeSummary folds each into FailedShards and forces
+		// complete=false so the discovery failure is never silently absorbed.
+		regionDiscoveryFailed: regionDiscoveryFailed,
+	}
 	missingAccountIDs := acctBarrier.accountIDs()
 	if len(missingAccounts) > 0 {
 		fmt.Fprintf(os.Stderr,
@@ -370,6 +379,15 @@ func runMergeMode(ctx context.Context, baseCfg aws.Config, runID string, expecte
 		}
 	}
 
+	// Alarm-able coverage signal: even when the state machine SUCCEEDS, the merged
+	// org scan can be silently incomplete (vanished/errored shards, missing
+	// per-account objects). The Step Functions Failed/TimedOut alarms never fire in
+	// that case, so emit a CloudWatch metric (via an Embedded Metric Format log
+	// line CloudWatch Logs auto-extracts) that AlertingStack alarms on. Emitted on
+	// EVERY run — ScanIncomplete=0 on a clean run — so the alarm has a live metric
+	// stream and does not rely solely on missing-data handling.
+	emitScanCoverageMetric(runID, summary.Incomplete, summary.MissingShards, len(summary.FailedShards))
+
 	// Upload each merged artifact at its absolute results-bucket key. The keys in
 	// `artifacts` are already absolute (scans/latest/...), so we use a prefix-less
 	// S3 writer-style PutObject directly rather than output.S3Writer (whose Prefix
@@ -380,11 +398,10 @@ func runMergeMode(ctx context.Context, baseCfg aws.Config, runID string, expecte
 			contentType = "text/markdown"
 		}
 		if _, perr := client.PutObject(ctx, &s3.PutObjectInput{
-			Bucket:               aws.String(bucket),
-			Key:                  aws.String(key),
-			Body:                 bytes.NewReader(body),
-			ContentType:          aws.String(contentType),
-			ServerSideEncryption: types.ServerSideEncryptionAes256,
+			Bucket:      aws.String(bucket),
+			Key:         aws.String(key),
+			Body:        bytes.NewReader(body),
+			ContentType: aws.String(contentType),
 		}); perr != nil {
 			return LambdaResponse{}, fmt.Errorf("merge mode: put %s: %w", key, perr)
 		}
@@ -437,4 +454,53 @@ func getObjectBytes(ctx context.Context, client *s3.Client, bucket, key string) 
 		return nil, fmt.Errorf("merge mode: read %s/%s: %w", bucket, key, err)
 	}
 	return buf.Bytes(), nil
+}
+
+// scanCoverageMetricNamespace is the CloudWatch namespace the org-scan coverage
+// metrics publish under. AlertingStack (cdk/lib/alerting-stack.ts) alarms on the
+// ScanIncomplete metric in this namespace, so the two MUST stay in sync.
+const scanCoverageMetricNamespace = "CryptaMap"
+
+// emitScanCoverageMetric writes a CloudWatch Embedded Metric Format (EMF) log
+// line to stdout so CloudWatch Logs auto-extracts a ScanIncomplete metric (plus
+// MissingShards / FailedShards) into the CryptaMap namespace. This is the
+// alarm-able signal for a SUCCEEDED state-machine run that produced a silently
+// incomplete org CBOM — the Step Functions Failed/TimedOut alarms never fire in
+// that case. Emitted on every merge (ScanIncomplete=0 when clean) so the alarm
+// has a continuous metric stream rather than relying only on missing-data
+// handling. Best-effort: a marshal/write failure is logged to stderr and never
+// fails the run (the loud stderr report above is the backstop).
+func emitScanCoverageMetric(runID string, incomplete bool, missingShards, failedShards int) {
+	scanIncomplete := 0
+	if incomplete {
+		scanIncomplete = 1
+	}
+	emf := map[string]any{
+		"_aws": map[string]any{
+			"Timestamp": time.Now().UnixMilli(),
+			"CloudWatchMetrics": []map[string]any{{
+				"Namespace": scanCoverageMetricNamespace,
+				// No dimensions: publish these to the namespace root so the alarm
+				// tracks one org-wide series (an empty outer array = the no-dimension set).
+				"Dimensions": [][]string{},
+				"Metrics": []map[string]string{
+					{"Name": "ScanIncomplete", "Unit": "Count"},
+					{"Name": "MissingShards", "Unit": "Count"},
+					{"Name": "FailedShards", "Unit": "Count"},
+				},
+			}},
+		},
+		"runId":          runID,
+		"ScanIncomplete": scanIncomplete,
+		"MissingShards":  missingShards,
+		"FailedShards":   failedShards,
+	}
+	line, err := json.Marshal(emf)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[merge] runId=%s WARN could not marshal ScanIncomplete EMF metric: %v\n", runID, err)
+		return
+	}
+	// EMF is extracted from stdout log lines (structured JSON), one metric doc per
+	// line. Stderr already carries the human-readable loud-incomplete report.
+	fmt.Fprintln(os.Stdout, string(line))
 }

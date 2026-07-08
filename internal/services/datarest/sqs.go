@@ -50,11 +50,34 @@ func (s SQSScanner) scan(ctx context.Context, client sqsAPI, accountID, region s
 	assets := []models.CryptoAsset{}
 	var nextToken *string
 	for {
-		out, err := client.ListQueues(ctx, &sqs.ListQueuesInput{NextToken: nextToken})
+		// MaxResults MUST be set explicitly: per the SQS API, when MaxResults is
+		// unset ListQueues returns up to 1,000 queue URLs and NEVER returns a
+		// NextToken, so the pagination loop below would silently truncate at
+		// ~1000 queues (a false all-clear by omission in dense accounts).
+		out, err := client.ListQueues(ctx, &sqs.ListQueuesInput{
+			NextToken:  nextToken,
+			MaxResults: aws.Int32(1000),
+		})
 		if err != nil {
 			return nil, fmt.Errorf("sqs ListQueues: %w", err)
 		}
-		for _, url := range out.QueueUrls {
+		// Cap the per-page batch to the remaining per-scanner budget BEFORE the
+		// per-queue attribute reads, so a pathological account never grows the
+		// shard unbounded (and the truncation is LOUD, never silent).
+		urls := out.QueueUrls
+		if remaining := services.MaxAssetsPerScanner - len(assets); remaining < len(urls) {
+			if remaining <= 0 {
+				services.TruncationCapReached(len(assets), s.Name(), region)
+				return assets, nil
+			}
+			urls = urls[:remaining]
+			// The cap lands mid-page: this page fills the shard exactly, so the
+			// remaining URLs here (and any later pages) are dropped. Emit the LOUD
+			// truncation warning now — the remaining<=0 branch above only fires on a
+			// SUBSEQUENT iteration, which never happens if this is the final page.
+			services.TruncationCapReached(services.MaxAssetsPerScanner, s.Name(), region)
+		}
+		for _, url := range urls {
 			u := url
 			// Use the URL last path segment as the resource ID.
 			parts := strings.Split(u, "/")

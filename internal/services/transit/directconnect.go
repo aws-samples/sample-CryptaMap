@@ -86,14 +86,26 @@ func (s DirectConnectScanner) scan(ctx context.Context, client directConnectAPI,
 			suite = "none"
 		}
 
-		// MACsec is a link-layer (L2) encryption protocol. CycloneDX 1.7
-		// protocolProperties.type is a closed ENUM that has NO "macsec" member
-		// (tls/ssh/ipsec/ike/sstp/wpa/dtls/quic/...), so emitting "macsec" there
-		// fails schema validation. Use the valid "other" enum value and record the
-		// real protocol via cryptamap:protocol below (the suite name already says
-		// "MACsec (AES-GCM)").
-		props := services.TLSProtocolProps("macsec", suite)
-		props.ProtocolProperties.Type = "other"
+		// Two shapes: a live-MACsec (SymmetricOnly) connection carries a real
+		// protocol block; the no-encryption branches carry the canonical
+		// NoEncryption at-rest/absent-cipher block (not a fabricated protocol).
+		//
+		// For the live-MACsec block: MACsec is a link-layer (L2) encryption
+		// protocol. CycloneDX 1.7 protocolProperties.type is a closed ENUM that has
+		// NO "macsec" member (tls/ssh/ipsec/ike/sstp/wpa/dtls/quic/...), so emitting
+		// "macsec" there fails schema validation. Use the valid "other" enum value
+		// and record the real protocol via cryptamap:protocol below (the suite name
+		// already says "MACsec (AES-GCM)"). Version left empty: "macsec" is a
+		// protocol NAME, not a version, and consumers parse
+		// ProtocolProperties.Version as a TLS-style version token. The real protocol
+		// is recorded via Properties["protocol"].
+		var props models.CryptoProperties
+		if posture == models.PostureSymmetricOnly {
+			props = services.TLSProtocolProps("", suite)
+			props.ProtocolProperties.Type = "other"
+		} else {
+			props = services.NoEncryption()
+		}
 		a := services.NewAsset("directconnect", models.CategoryDataInTransit, accountID, region, *c.ConnectionId, "AWS::DirectConnect::Connection", props)
 		a.Properties["protocol"] = "macsec"
 		services.PostureProperty(&a, posture)

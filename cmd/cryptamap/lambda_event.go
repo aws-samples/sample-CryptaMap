@@ -77,6 +77,15 @@ type LambdaEvent struct {
 	// (completion barrier, SCALING.md §4.4). 0/absent = unknown (legacy replay):
 	// the merge then reports complete with no gap rather than a bogus shortfall.
 	ExpectedShards int `json:"expectedShards,omitempty"`
+	// RegionDiscoveryFailedAccounts is the seed-emitted list of account IDs whose
+	// enabled-region enumeration (AssumeRole + DescribeRegions) FAILED, so they
+	// were scanned over the static FALLBACK_REGIONS only — their true region
+	// coverage is unknown (docs/SCALING.md §6 Bug B). The final merge folds each
+	// such account into the completion barrier (a FailedShards row with region
+	// "*") and forces complete=false, so an all-region org scan is never marked
+	// complete after a region-discovery failure. Empty/absent on a clean run or a
+	// legacy replay.
+	RegionDiscoveryFailedAccounts []string `json:"regionDiscoveryFailedAccounts,omitempty"`
 }
 
 // resolveScanRegion picks the region to scan, following the documented chain:
@@ -91,6 +100,31 @@ func resolveScanRegion(evt LambdaEvent, fallbackCfgRegion string) string {
 		region = "us-east-1"
 	}
 	return region
+}
+
+// validateLambdaEvent rejects event shapes that would otherwise silently do
+// something other than what the operator asked for:
+//
+//   - Regions (plural) is NOT part of the contract — the CDK fan-out sends the
+//     singular `region` per shard, and no code path ever read the list, so an
+//     event supplying {"regions":[...]} would be scanned in ONE fallback region
+//     while looking like a multi-region success (a coverage gap in a compliance
+//     scanner). Fail loudly instead.
+//   - A final-merge event ({"merge":true}) without a runId would list the shared
+//     `_norun` namespace and fold EVERY historic runId-less shard into one
+//     temporally-incoherent "current" org report. Require the runId.
+func validateLambdaEvent(evt LambdaEvent) error {
+	if len(evt.Regions) > 0 {
+		return fmt.Errorf("event field \"regions\" is not supported: the fan-out contract is one singular \"region\" per invocation (got %d regions); invoke once per region", len(evt.Regions))
+	}
+	// Both merge tiers (the terminal org merge and the per-account merge) scope
+	// their work to a single fan-out run via RunID, so a merge event without a
+	// RunID would list the shared `_norun` prefix and fold every historic
+	// runId-less shard into one temporally-incoherent report — reject loudly.
+	if (evt.Merge || evt.MergeAccount) && evt.RunID == "" {
+		return fmt.Errorf("merge mode: runId is required (an empty runId would merge every historic _norun shard into one incoherent report)")
+	}
+	return nil
 }
 
 // parseLambdaEvent unmarshals a raw JSON event into a LambdaEvent. It is a small

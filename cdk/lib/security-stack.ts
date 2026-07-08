@@ -77,16 +77,19 @@ export class SecurityStack extends cdk.Stack {
 
       // ------------------------------------------------------------------
       // 1) Orchestrator role (lives in the Audit / delegated-admin account).
-      //    The Step Functions state machine + scanner Lambda use this to
-      //    assume CryptaMapScannerRole in each member account. sts:AssumeRole
+      //    The scanner + seed Lambdas run AS this role to assume
+      //    CryptaMapScannerRole in each member account. sts:AssumeRole
       //    lives HERE only — never on the member scanner role.
+      //    Trust is lambda.amazonaws.com ONLY: the Step Functions state
+      //    machine (OrgFanoutStack) runs under its own CDK-synthesized role,
+      //    so a states.amazonaws.com trust here would be a dead, unconditioned
+      //    service trust that any later-created state machine could ride.
+      //    If Step-Functions-as-orchestrator is ever adopted, add the trust
+      //    then, gated with aws:SourceAccount/aws:SourceArn conditions.
       // ------------------------------------------------------------------
       const orchestrator = new iam.Role(this, 'OrchestratorRole', {
         roleName: 'CryptaMapOrchestratorRole',
-        assumedBy: new iam.CompositePrincipal(
-          new iam.ServicePrincipal('lambda.amazonaws.com'),
-          new iam.ServicePrincipal('states.amazonaws.com'),
-        ),
+        assumedBy: new iam.ServicePrincipal('lambda.amazonaws.com'),
         description:
           'CryptaMap orchestrator - the scanner Lambda execution role; assumes CryptaMapScannerRole in each account.',
         managedPolicies: [
@@ -107,11 +110,25 @@ export class SecurityStack extends cdk.Stack {
         effect: iam.Effect.ALLOW,
         actions: ['sts:AssumeRole'],
         resources: [`arn:${cdk.Aws.PARTITION}:iam::*:role/${this.scannerRoleName}`],
+        // Confine AssumeRole to accounts INSIDE this AWS Organization. The
+        // resource is a wildcard account (`iam::*:role/CryptaMapScannerRole`) so
+        // the StackSet can deploy the member role org-wide, but without this
+        // condition the orchestrator (or anyone who can invoke the scanner
+        // Lambda and pass an arbitrary roleArn — lambda.go assumes evt.RoleArn
+        // verbatim) could assume a same-named role in an ATTACKER-controlled
+        // account whose role trusts this orchestrator, then fold attacker-crafted
+        // assets/findings into the trusted central results. aws:ResourceOrgID
+        // matches the org of the role being assumed, so cross-org targets are
+        // denied even when the account id is wildcarded.
+        conditions: {
+          StringEquals: { 'aws:ResourceOrgID': organizationId },
+        },
       }));
-      // The EXACTLY THREE resource-scoped WRITES (from scanner-actions.json,
-      // generated). These live on the ORCHESTRATOR ONLY — never on a member
-      // scanner role — and are scoped to this account's results bucket, scans
-      // table, and Security Hub product ARN.
+      // The resource-scoped WRITES (from scanner-actions.json, generated). These
+      // live on the ORCHESTRATOR ONLY — never on a member scanner role — and are
+      // scoped to this account's results bucket and scans table. (A third write,
+      // securityhub:BatchImportFindings, was removed with the dead Security Hub
+      // alert path; the generated contract now carries two writes.)
       this.addOrchestratorWrites(orchestrator, props);
       this.orchestratorRole = orchestrator;
       // The orchestrator needs to enumerate accounts in the org. With the Audit
@@ -142,6 +159,15 @@ export class SecurityStack extends cdk.Stack {
         // Trust EXACTLY mirrors the member StackSet template: the orchestrator
         // ArnPrincipal may assume only when aws:PrincipalOrgID == organizationId
         // AND sts:ExternalId == externalId (confused-deputy / cross-org guard).
+        //
+        // OPERATIONAL COUPLING (applies to the member StackSet roles too): IAM
+        // stores role-ARN principals by the role's UNIQUE ID at policy-write
+        // time. If CryptaMapOrchestratorRole is ever deleted and RECREATED, its
+        // ARN is unchanged — so no StackSet parameter changes and no instance
+        // update runs — yet every stored trust now references the stale unique
+        // ID and AssumeRole fails org-wide until the operator forces a StackSet
+        // re-run (and a redeploy of this stack) with the identical-looking
+        // template. Do not delete/recreate the orchestrator role casually.
         assumedBy: new iam.ArnPrincipal(orchestrator.roleArn).withConditions({
           StringEquals: {
             'aws:PrincipalOrgID': organizationId,
@@ -150,11 +176,21 @@ export class SecurityStack extends cdk.Stack {
         }),
         description:
           'CryptaMap read-only scanner role in the management account (counterpart to the member-account StackSet role).',
+        // Mirror the member template's MaxSessionDurationSeconds default (3600s)
+        // EXPLICITLY so the "same trust, same permissions" contract stays honest
+        // even if CDK's implicit default ever changes.
+        maxSessionDuration: cdk.Duration.hours(1),
         // No managed policies: the custom least-privilege READ list (from
         // cmd/gen-policy) is attached below. READS ONLY — this role, like the
         // member StackSet role, gets NONE of the 3 orchestrator writes.
       });
       this.addScannerReadPolicy(localScannerRole);
+      // Mirror the member template's tag set (Project/Owner/CostCenter arrive via
+      // the app-wide cdk.Tags in bin/app.ts). ManagedBy is template-specific, so
+      // add it here — with an honest value (this role is CDK-managed, not
+      // StackSet-managed) — so tag-keyed inventory/cost tooling that keys on the
+      // member roles' tags also sees the hub-account scanner role.
+      cdk.Tags.of(localScannerRole).add('ManagedBy', 'CryptaMapSecurityStack');
       new cdk.CfnOutput(this, 'LocalScannerRoleArn', { value: localScannerRole.roleArn });
 
       // ------------------------------------------------------------------
@@ -190,7 +226,11 @@ export class SecurityStack extends cdk.Stack {
         capabilities: ['CAPABILITY_NAMED_IAM'],
         operationPreferences: {
           maxConcurrentPercentage: 100,
-          failureTolerancePercentage: 25,
+          // 0 (not 25): this StackSet installs a single IAM role per account, so
+          // retries are cheap — and any tolerated failure would mean a member
+          // account silently missing its scanner role, i.e. a silently
+          // incomplete org-wide CBOM. Fail the operation loudly instead.
+          failureTolerancePercentage: 0,
           regionConcurrencyType: 'PARALLEL',
         },
         parameters: [
@@ -255,16 +295,19 @@ export class SecurityStack extends cdk.Stack {
   }
 
   /**
-   * Grant the orchestrator role the EXACTLY THREE resource-scoped WRITES declared
-   * in the generated contract (scanner-actions.json `orchestratorWrites`). The
-   * portable placeholder tokens in each statement's resource are resolved to this
+   * Grant the orchestrator role the resource-scoped WRITES declared in the
+   * generated contract (scanner-actions.json `orchestratorWrites`). The portable
+   * placeholder tokens in each statement's resource are resolved to this
    * account's real ARNs / CloudFormation pseudo-parameters here. Member scanner
    * roles never call this — they are reads-only.
    */
   private addOrchestratorWrites(role: iam.Role, props: SecurityStackProps): void {
-    // Security Hub custom-product ARN for THIS account+region (the only place the
-    // orchestrator pushes findings). Matches the ASFF ProductArn the CLI stamps:
-    // arn:<partition>:securityhub:<region>:<account>:product/<account>/default.
+    // Security Hub custom-product ARN for THIS account+region. Matches the ASFF
+    // ProductArn the CLI stamps: arn:<partition>:securityhub:<region>:<account>:
+    // product/<account>/default. Retained so the {SECURITYHUB_PRODUCT_ARN}
+    // placeholder still resolves if a securityhub:BatchImportFindings write is
+    // ever re-added to cmd/gen-policy (it was removed with the dead Security Hub
+    // alert path — no code path currently calls BatchImportFindings).
     const securityHubProductArn =
       `arn:${cdk.Aws.PARTITION}:securityhub:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:product/${cdk.Aws.ACCOUNT_ID}/default`;
     const resolve = (placeholder: string): string => {

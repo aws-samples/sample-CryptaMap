@@ -34,7 +34,7 @@ type iotCertsAPI interface {
 }
 
 // Scan lists IoT certificates and emits one asset per certificate.
-// Pagination via Marker; capped at 1000 items.
+// Pagination via Marker; capped loudly at services.MaxAssetsPerScanner.
 func (s IoTCertsScanner) Scan(ctx context.Context, cfg aws.Config) ([]models.CryptoAsset, error) {
 	client := iot.NewFromConfig(cfg)
 	accountID := services.AccountID(ctx, cfg)
@@ -52,7 +52,6 @@ func (s IoTCertsScanner) Scan(ctx context.Context, cfg aws.Config) ([]models.Cry
 // stderr), never disguised as a confident classical classification.
 func (s IoTCertsScanner) scan(ctx context.Context, client iotCertsAPI, accountID, region string) ([]models.CryptoAsset, error) {
 	assets := []models.CryptoAsset{}
-	const maxItems = 1000
 	var marker *string
 	for {
 		out, err := client.ListCertificates(ctx, &iot.ListCertificatesInput{Marker: marker})
@@ -91,7 +90,14 @@ func (s IoTCertsScanner) scan(ctx context.Context, client iotCertsAPI, accountID
 				}
 			}
 
-			props := services.CertProps(subject, "", parsed.SigAlgo, nb, time.Time{})
+			// Prefer the cert's own parsed NotBefore over the IoT registration
+			// date, and record the parsed NotAfter — otherwise an expired
+			// device cert is indistinguishable from a valid one in the CBOM.
+			// Both stay zero when the leaf could not be parsed.
+			if !parsed.NotBefore.IsZero() {
+				nb = parsed.NotBefore
+			}
+			props := services.CertProps(subject, "", parsed.SigAlgo, nb, parsed.NotAfter)
 			if parsed.AlgoProps != nil {
 				props.AlgorithmProperties = parsed.AlgoProps
 			}
@@ -108,7 +114,9 @@ func (s IoTCertsScanner) scan(ctx context.Context, client iotCertsAPI, accountID
 				services.StampObserved(&a, "high")
 			}
 			assets = append(assets, a)
-			if len(assets) >= maxItems {
+			// Loud shared cap: IoT device-cert fleets routinely exceed 1000, so
+			// a silent local cap would under-report the fleet with no signal.
+			if services.TruncationCapReached(len(assets), s.Name(), region) {
 				return assets, nil
 			}
 		}

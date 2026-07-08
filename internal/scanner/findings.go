@@ -2,9 +2,8 @@ package scanner
 
 import (
 	"fmt"
+	"hash/fnv"
 	"time"
-
-	"github.com/google/uuid"
 
 	"github.com/aws-samples/cryptamap/internal/compliance"
 	"github.com/aws-samples/cryptamap/internal/risk"
@@ -18,7 +17,7 @@ import (
 // risk.CalculateForService, takes the worse of the posture- and Mosca-derived
 // severities, and attaches the compliance mappings.
 //
-// It is deliberately deterministic and dependency-light (stdlib + uuid +
+// It is deliberately deterministic and dependency-light (stdlib +
 // internal/risk + internal/compliance + pkg/models): it touches NOTHING that
 // lives only in DynamoDB or AWS. That property is what lets the offline
 // org-merge-files adapter regenerate the exact same findings a live scan would
@@ -46,16 +45,27 @@ func BuildFindings(assets []models.CryptoAsset, comp *compliance.Registry, overr
 		if posture == models.PostureSymmetricOnly {
 			continue
 		}
-		// Determine severity. For genuinely vulnerable/at-risk postures take the
-		// worse of posture-derived and Mosca-derived (HNDL urgency rightly
-		// applies). But when the posture is already quantum-resistant
-		// (pqc-hybrid / pqc-ready), the Mosca/HNDL urgency is irrelevant — the
-		// cryptography is quantum-resistant regardless of data shelf-life — so the
-		// severity is the posture severity (INFORMATIONAL) only, and we do NOT let
-		// the posture-blind Mosca score raise it.
+		// Determine severity. The Mosca/HNDL urgency floor (a posture-blind,
+		// per-service constant) is applied ONLY to postures whose Shor-vulnerable
+		// classical crypto the scanner actually OBSERVED — NoEncryption, LegacyTLS,
+		// NonPQCClassical — where a definite HNDL-urgency escalation is justified by
+		// real evidence. It is NOT applied when:
+		//   - the posture is already quantum-resistant (pqc-hybrid / pqc-ready /
+		//     symmetric-only): the crypto is quantum-resistant regardless of data shelf-life; or
+		//   - the posture is UNKNOWN (unreadable / API-error path) OR any other
+		//     non-vulnerable/non-canonical value (empty or a crafted posture from an
+		//     ingested CBOM): the scanner has NOT proven a vulnerable asset exists,
+		//     so raising it to a definite CRITICAL from a hardcoded score (e.g.
+		//     rds=9) would fabricate an urgency verdict the data cannot support. Such
+		//     postures keep their SeverityFromPosture floor (Unknown -> MEDIUM "needs
+		//     investigation"); the Mosca score is still recorded on the finding for
+		//     transparency but is never used to escalate. This is the inverse of the
+		//     fabricated-all-clear class — do not fabricate alarm from a posture we
+		//     could not read. risk.IsMoscaEscalatable is an ALLOWLIST of exactly the
+		//     three observed-vulnerable postures, so unrecognized values fail closed.
 		moscaScore := risk.CalculateForService(a.Service, overrides)
 		sev := risk.SeverityFromPosture(posture)
-		if !risk.IsQuantumResistantPosture(posture) {
+		if risk.IsMoscaEscalatable(posture) {
 			sev = risk.HighestSeverity(sev, risk.SeverityFromMosca(moscaScore.Score))
 		}
 		complianceMaps := []models.ComplianceMapping{}
@@ -63,7 +73,7 @@ func BuildFindings(assets []models.CryptoAsset, comp *compliance.Registry, overr
 			complianceMaps = comp.MapAll(a, posture)
 		}
 		findings = append(findings, models.Finding{
-			ID:             uuid.NewString(),
+			ID:             stableFindingID(a, posture),
 			Title:          fmt.Sprintf("%s — %s posture for %s", a.Service, posture, a.ResourceID),
 			Description:    fmt.Sprintf("CryptaMap detected posture=%s for %s resource %s in region %s.", posture, a.ResourceType, a.ResourceID, a.Region),
 			Severity:       sev,
@@ -84,4 +94,29 @@ func BuildFindings(assets []models.CryptoAsset, comp *compliance.Registry, overr
 		})
 	}
 	return findings
+}
+
+// stableFindingID derives a deterministic, run-independent Finding.ID from the
+// asset's stable identity plus its posture, so regulator-facing finding
+// artifacts diff cleanly across scan runs (the previous uuid.NewString() minted
+// a fresh id every run, making every re-scan look like a wholesale change).
+//
+// It reuses the same discriminator the ASFF exporter uses (see
+// output.asffStableFindingKey): the preferred key is the asset's BomRef, which
+// is itself deterministic (BomRefForARN = FNV-64a of the resource ARN, the same
+// key org-wide dedup uses) and unique per discovered asset. When BomRef is
+// absent (e.g. hand-built or CBOM-ingested assets that predate bomRef
+// assignment) it falls back to an FNV-64a hash of the stable identity fields
+// (account|region|service|resourceID), so the id is still reproducible
+// run-over-run. Posture IS part of the id here (unlike the Security Hub key):
+// this id identifies a specific finding record, and a posture change on the same
+// asset is a materially different finding for diff purposes.
+func stableFindingID(a models.CryptoAsset, posture models.CryptoPosture) string {
+	key := a.BomRef
+	if key == "" {
+		h := fnv.New64a()
+		_, _ = h.Write([]byte(a.AccountID + "|" + a.Region + "|" + a.Service + "|" + a.ResourceID))
+		key = fmt.Sprintf("%016x", h.Sum64())
+	}
+	return fmt.Sprintf("finding:%s:%s", key, posture)
 }

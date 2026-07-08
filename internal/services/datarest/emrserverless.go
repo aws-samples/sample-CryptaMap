@@ -72,11 +72,19 @@ func (s EMRServerlessScanner) scan(ctx context.Context, client emrServerlessAPI,
 			}
 			a := services.NewAsset("emr_serverless", models.CategoryDataAtRest, accountID, region, id, "AWS::EMRServerless::Application", services.AESAtRest())
 			services.PostureProperty(&a, models.PostureSymmetricOnly)
-			a.Properties["kmsKeyId"] = "AWS_OWNED_KMS_KEY"
+			services.StampDocFact(&a, "high", "https://docs.aws.amazon.com/emr/latest/EMR-Serverless-UserGuide/data-protection.html", "2026-06-15")
+			// ListApplications does NOT expose the application's key configuration,
+			// and this scanner makes no per-application Get call — so asserting the
+			// service-owned default key here would fabricate a "no customer CMK"
+			// custody verdict that was never observed (a customer KMS key IS
+			// configurable on EMR Serverless). Key custody is honestly undetermined;
+			// the always-on AES-256 posture is unaffected.
+			a.Properties["kmsKeyId"] = "UNRESOLVED"
+			a.Properties["keyTier"] = "unknown"
 			if name != "" {
 				a.Properties["applicationName"] = name
 			}
-			a.Properties["note"] = "EMR Serverless always encrypts worker disks at rest with AES-256 (service-owned key by default; an optional customer KMS key is a key-tier refinement)."
+			a.Properties["note"] = "EMR Serverless always encrypts worker disks at rest with AES-256 (no opt-out); ListApplications does not expose the key configuration, so key custody (service-owned default vs customer CMK) is undetermined."
 			assets = append(assets, a)
 			if services.TruncationCapReached(len(assets), s.Name(), region) {
 				return assets, nil

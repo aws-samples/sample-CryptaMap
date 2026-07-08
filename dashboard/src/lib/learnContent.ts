@@ -214,7 +214,7 @@ export const LEARN_SECTIONS: LearnSection[] = [
       },
       {
         body:
-          'Because Grover only quadratically speeds up brute-force key search — and is hard to parallelize — NIST states that AES-192 and AES-256 will still be safe against quantum attack, and that AES-128 will likely remain secure too. This is why CryptaMap treats AES-256-at-rest as "quantum-resistant — no action".',
+          'Because Grover only quadratically speeds up brute-force key search — and is hard to parallelize — NIST states that AES-192 and AES-256 will still be safe against quantum attack, and that AES-128 will likely remain secure too. This is why CryptaMap treats symmetric encryption at rest as "quantum-resistant — no action" (the posture is key-size-neutral: it does not assert a specific AES key length the scanner has not observed).',
         sources: [NIST_PQC_FAQ],
       },
       {

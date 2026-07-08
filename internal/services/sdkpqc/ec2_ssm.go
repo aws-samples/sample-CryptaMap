@@ -32,7 +32,7 @@ type ssmInstanceInfoAPI interface {
 }
 
 // Scan lists SSM-managed instances and emits one asset per instance.
-// Pagination via NextToken; capped at 1000 items.
+// Pagination via NextToken; capped loudly at services.MaxAssetsPerScanner items.
 //
 // DescribeInstanceInformation exposes only platform/agent metadata — no TLS
 // version, cipher suite, or protocol field — so the instance's own outbound
@@ -56,7 +56,6 @@ func (s EC2SSMScanner) Scan(ctx context.Context, cfg aws.Config) ([]models.Crypt
 // incomplete rather than a clean-looking empty success.
 func (s EC2SSMScanner) scan(ctx context.Context, client ssmInstanceInfoAPI, accountID, region string) ([]models.CryptoAsset, error) {
 	assets := []models.CryptoAsset{}
-	const maxItems = 1000
 	var nextToken *string
 	for {
 		// MaxResults raises the page size from the documented default of 10 to cut
@@ -109,7 +108,10 @@ func (s EC2SSMScanner) scan(ctx context.Context, client ssmInstanceInfoAPI, acco
 			// observation: stamp source=aws-doc so the basis is auditable.
 			services.StampDocFactKeyed(&a, "sdkpqc/ec2_ssm/control-plane-tls-floor")
 			assets = append(assets, a)
-			if len(assets) >= maxItems {
+			// Shared LOUD cap (25000 + stderr warning) instead of the old silent
+			// local 1000: silent truncation = under-reported crypto assets = a
+			// false all-clear (see services/common.go).
+			if services.TruncationCapReached(len(assets), s.Name(), region) {
 				return assets, nil
 			}
 		}

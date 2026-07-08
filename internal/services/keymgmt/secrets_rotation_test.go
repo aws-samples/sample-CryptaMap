@@ -222,3 +222,36 @@ func TestSecretsRotationDescribeKeyErrorKeepsSymmetricOnly(t *testing.T) {
 		t.Errorf("expected SymmetricOnly retained when DescribeKey fails, got %q", got)
 	}
 }
+
+// TestSecretsRotationDescribeKeyMemoizedPerScan guards the N+1 fix: hundreds of
+// secrets routinely share ONE customer CMK, so DescribeKey must be resolved once
+// per distinct key id per scan (memoized), not once per secret. Without the
+// memo, a 5000-secret account issues 5000 sequential KMS calls for a handful of
+// distinct keys.
+func TestSecretsRotationDescribeKeyMemoizedPerScan(t *testing.T) {
+	smFake := &secretsrotationFakeSM{
+		pages: []*secretsmanager.ListSecretsOutput{
+			{SecretList: []smtypes.SecretListEntry{
+				{ARN: secretsrotationStrptr("arn:secret-1"), KmsKeyId: secretsrotationStrptr("key-shared")},
+				{ARN: secretsrotationStrptr("arn:secret-2"), KmsKeyId: secretsrotationStrptr("key-shared")},
+				{ARN: secretsrotationStrptr("arn:secret-3"), KmsKeyId: secretsrotationStrptr("key-shared")},
+			}},
+		},
+	}
+	kmsFake := &secretsrotationFakeKMS{spec: "SYMMETRIC_DEFAULT"}
+	assets, err := SecretsRotationScanner{}.scan(context.Background(), smFake, kmsFake, "111122223333", "us-east-1")
+	if err != nil {
+		t.Fatalf("scan returned unexpected error: %v", err)
+	}
+	if len(assets) != 3 {
+		t.Fatalf("expected 3 assets, got %d", len(assets))
+	}
+	if kmsFake.calls != 1 {
+		t.Errorf("expected DescribeKey called exactly once for 3 secrets sharing one CMK (memoized), got %d", kmsFake.calls)
+	}
+	for _, a := range assets {
+		if got := a.Properties["kmsKeySpec"]; got != "SYMMETRIC_DEFAULT" {
+			t.Errorf("secret %s: expected memoized kmsKeySpec SYMMETRIC_DEFAULT, got %q", a.ResourceID, got)
+		}
+	}
+}

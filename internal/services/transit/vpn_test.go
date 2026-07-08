@@ -146,7 +146,9 @@ func TestVPNScanHonestyPosture(t *testing.T) {
 				},
 				{
 					VpnConnectionId: vpnStrptr("vpn-fallback"),
-					// nil Options -> fallback to ipsec / AES-256-GCM
+					// nil Options -> fallback: Type "ipsec" only, NO fabricated
+					// version or cipher suite (nothing about the algorithms was
+					// read from the API).
 				},
 			},
 		},
@@ -184,5 +186,58 @@ func TestVPNScanHonestyPosture(t *testing.T) {
 	}
 	if obs.CryptoProps.ProtocolProperties.PQCHybrid {
 		t.Errorf("classical DH group 21 must NOT be classified as PQC-hybrid")
+	}
+
+	// The fallback connection (no tunnel options read) must assert ONLY what is
+	// definitional: Type ipsec. The old fallback fabricated an "AES-256-GCM"
+	// cipher suite and stuffed "ipsec" into the Version field — neither claim
+	// was provable from the API response, so both must be absent.
+	fb, _ := vpnAssetByID(assets, "vpn-fallback")
+	fbpp := fb.CryptoProps.ProtocolProperties
+	if fbpp.Version != "" {
+		t.Errorf("fallback Version=%q, want \"\" (nothing about the protocol version was read; the old code fabricated one)", fbpp.Version)
+	}
+	if len(fbpp.CipherSuites) != 0 {
+		t.Errorf("fallback CipherSuites=%v, want none (the old AES-256-GCM suite was fabricated, not observed)", fbpp.CipherSuites)
+	}
+}
+
+// TestVPNScanSkipsDeletedConnections verifies that deleted/deleting VPN
+// connections — which DescribeVpnConnections keeps visible for hours — are NOT
+// emitted as current encrypted-transit assets, while live connections still are.
+func TestVPNScanSkipsDeletedConnections(t *testing.T) {
+	client := &fakeVPNEC2Client{
+		out: &ec2.DescribeVpnConnectionsOutput{
+			VpnConnections: []ec2types.VpnConnection{
+				{
+					VpnConnectionId: vpnStrptr("vpn-deleted"),
+					State:           ec2types.VpnStateDeleted,
+				},
+				{
+					VpnConnectionId: vpnStrptr("vpn-deleting"),
+					State:           ec2types.VpnStateDeleting,
+				},
+				{
+					VpnConnectionId: vpnStrptr("vpn-live"),
+					State:           ec2types.VpnStateAvailable,
+				},
+			},
+		},
+	}
+	assets, err := VPNScanner{}.scan(context.Background(), client, "111122223333", "us-east-1")
+	if err != nil {
+		t.Fatalf("scan returned unexpected error: %v", err)
+	}
+	if _, ok := vpnAssetByID(assets, "vpn-deleted"); ok {
+		t.Errorf("deleted VPN connection must NOT be emitted as a live transit asset")
+	}
+	if _, ok := vpnAssetByID(assets, "vpn-deleting"); ok {
+		t.Errorf("deleting VPN connection must NOT be emitted as a live transit asset")
+	}
+	if _, ok := vpnAssetByID(assets, "vpn-live"); !ok {
+		t.Errorf("live (available) VPN connection must still be emitted; got %d assets", len(assets))
+	}
+	if len(assets) != 1 {
+		t.Errorf("expected exactly 1 asset (only the live connection), got %d", len(assets))
 	}
 }

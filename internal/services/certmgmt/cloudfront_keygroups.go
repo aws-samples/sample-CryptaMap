@@ -68,9 +68,9 @@ func (s CloudFrontKeyGroupsScanner) scan(ctx context.Context, client cloudfrontK
 				continue
 			}
 			id := *pk.Id
-			algoName, keyBits := "traditional public key", 0
+			algoName, keyBits, parsedOK := "traditional public key", 0, false
 			if pk.EncodedKey != nil {
-				algoName, keyBits = parsePublicKeyAlgo(*pk.EncodedKey)
+				algoName, keyBits, parsedOK = parsePublicKeyAlgo(*pk.EncodedKey)
 			}
 			props := services.KeyMaterialProps("public-key", models.StateActive, keyBits, algoName)
 			if props.AlgorithmProperties == nil {
@@ -85,8 +85,15 @@ func (s CloudFrontKeyGroupsScanner) scan(ctx context.Context, client cloudfrontK
 			}
 
 			a := services.NewAsset("cloudfront_keygroups", models.CategoryCertificate, accountID, region, id, "AWS::CloudFront::PublicKey", props)
+			// The classical posture rests on the CloudFront platform constraint
+			// (only RSA/ECDSA public keys are accepted), so it holds even when
+			// the uploaded PEM could not be parsed — but an observed/high stamp
+			// on a FAILED parse would fabricate provenance, so the stamp is
+			// gated on a successful parse (mirrors iot_certs.go).
 			services.PostureProperty(&a, models.PostureNonPQCClassical)
-			services.StampObserved(&a, "high")
+			if parsedOK {
+				services.StampObserved(&a, "high")
+			}
 			if pk.Name != nil {
 				a.Properties["publicKeyName"] = *pk.Name
 			}
@@ -109,27 +116,29 @@ func (s CloudFrontKeyGroupsScanner) scan(ctx context.Context, client cloudfrontK
 }
 
 // parsePublicKeyAlgo parses a PEM-encoded public key and returns its algorithm
-// label + key size in bits. Returns a generic label on parse failure (the key is
-// still classical — never treated as PQC/safe).
-func parsePublicKeyAlgo(encodedKeyPEM string) (string, int) {
+// label + key size in bits + whether the parse succeeded. Returns a generic
+// label and ok=false on parse failure (the key is still classical per the
+// CloudFront RSA/ECDSA-only platform constraint — never treated as PQC/safe —
+// but ok=false lets the caller withhold the observed-provenance stamp).
+func parsePublicKeyAlgo(encodedKeyPEM string) (string, int, bool) {
 	block, _ := pem.Decode([]byte(encodedKeyPEM))
 	if block == nil {
-		return "traditional public key (unparsed)", 0
+		return "traditional public key (unparsed)", 0, false
 	}
 	pub, err := x509.ParsePKIXPublicKey(block.Bytes)
 	if err != nil {
-		return "traditional public key (unparsed)", 0
+		return "traditional public key (unparsed)", 0, false
 	}
 	switch k := pub.(type) {
 	case *rsa.PublicKey:
-		return "RSA", k.N.BitLen()
+		return "RSA", k.N.BitLen(), true
 	case *ecdsa.PublicKey:
 		bits := 0
 		if k.Curve != nil && k.Curve.Params() != nil {
 			bits = k.Curve.Params().BitSize
 		}
-		return "ECDSA", bits
+		return "ECDSA", bits, true
 	default:
-		return "traditional public key", 0
+		return "traditional public key", 0, true
 	}
 }

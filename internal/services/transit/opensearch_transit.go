@@ -57,20 +57,32 @@ func (s OpenSearchTransitScanner) scan(ctx context.Context, client opensearchTra
 			fmt.Fprintf(os.Stderr, "opensearch_transit DescribeDomain %s: %v\n", *d.DomainName, derr)
 			continue
 		}
-		ver := "1.2"
-		posture := models.PostureNonPQCClassical
+		// Honest defaults: when DomainEndpointOptions (or a recognizable
+		// TLSSecurityPolicy) is absent, the TLS floor/posture cannot be proven
+		// from the API data actually read — report Unknown with a note rather
+		// than fabricating a "1.2 classical" verdict.
+		minVer := ""
+		maxVer := ""
+		posture := models.PostureUnknown
 		policy := ""
 		enforceHTTPSStr := ""
 		certARN := ""
 		plaintextAllowed := false
-		note := ""
+		note := "DescribeDomain returned no readable DomainEndpointOptions.TLSSecurityPolicy; the domain's TLS floor and posture could not be determined."
 		if desc.DomainStatus != nil && desc.DomainStatus.DomainEndpointOptions != nil {
 			deo := desc.DomainStatus.DomainEndpointOptions
 			policy = string(deo.TLSSecurityPolicy)
 			// Deepen: match the REAL TLSSecurityPolicy enum values (the previous
 			// "1-2-pq" substring matched no real policy and produced a bogus
-			// PQC-hybrid flag). None of these policies are post-quantum.
-			ver, posture, _ = classifyOpenSearchTLSPolicy(policy)
+			// PQC-hybrid flag). None of these policies are post-quantum. Floor
+			// and ceiling come back separately: a floor-1.2 policy that merely
+			// permits up to 1.3 must report TLSMinVersion=1.2, never 1.3.
+			minVer, maxVer, posture, _ = classifyOpenSearchTLSPolicy(policy)
+			if posture == models.PostureUnknown {
+				note = fmt.Sprintf("OpenSearch TLSSecurityPolicy %q is not a recognized enum value; the TLS floor and posture could not be determined from it.", policy)
+			} else {
+				note = ""
+			}
 			if deo.EnforceHTTPS != nil {
 				if *deo.EnforceHTTPS {
 					enforceHTTPSStr = "true"
@@ -82,7 +94,11 @@ func (s OpenSearchTransitScanner) scan(ctx context.Context, client opensearchTra
 			// regardless of the TLSSecurityPolicy floor, so a domain that permits
 			// plaintext must NOT be reported as clean classical TLS (mirrors MSK's
 			// TLS_PLAINTEXT and elasticache's "preferred" mixed-mode handling).
-			plaintextAllowed, note = openSearchEnforceHTTPSOverride(deo.EnforceHTTPS)
+			// The plaintext note takes precedence over an unrecognized-policy
+			// note (no-encryption is the more severe, and proven, verdict).
+			if pt, ptNote := openSearchEnforceHTTPSOverride(deo.EnforceHTTPS); pt {
+				plaintextAllowed, note = pt, ptNote
+			}
 			// A custom endpoint binds a customer ACM cert (default AWS-managed
 			// endpoint cert is not resolvable). Only present when a custom endpoint
 			// is configured.
@@ -90,10 +106,12 @@ func (s OpenSearchTransitScanner) scan(ctx context.Context, client opensearchTra
 				certARN = *deo.CustomEndpointCertificateArn
 			}
 		}
-		props := services.TLSProtocolProps(ver, policy)
-		// The TLSSecurityPolicy enum is itself the documented TLS floor.
-		if props.ProtocolProperties != nil && ver != "" {
-			props.ProtocolProperties.TLSMinVersion = ver
+		// Version carries the policy's CEILING (highest permitted version);
+		// TLSMinVersion carries the FLOOR. Both are set only when proven from
+		// the recognized TLSSecurityPolicy enum value — never guessed.
+		props := services.TLSProtocolProps(maxVer, policy)
+		if props.ProtocolProperties != nil && minVer != "" {
+			props.ProtocolProperties.TLSMinVersion = minVer
 		}
 		if plaintextAllowed {
 			// EnforceHTTPS is disabled: plaintext is accepted regardless of the

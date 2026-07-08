@@ -19,6 +19,10 @@ export interface OrgFanoutStackProps extends cdk.StackProps {
   readonly scannerRoleName: string;
   /** ExternalId passed on sts:AssumeRole (must match the StackSet template). */
   readonly scannerExternalId?: string;
+  /** AWS Organization id (e.g. o-abc123) used to confine the seed Lambda's
+   *  sts:AssumeRole to member roles INSIDE this org (aws:ResourceOrgID), matching
+   *  the SecurityStack orchestrator grant. */
+  readonly organizationId?: string;
   /** Default region list to fan out over when an account does not narrow it. */
   readonly fanoutRegions?: string[];
   /**
@@ -48,9 +52,12 @@ export interface OrgFanoutStackProps extends cdk.StackProps {
  *      S3 partial (key already encodes account+region+scanId) using the
  *      worker's OWN/central creds. ResultWriter persists the Map manifest +
  *      child results to the central results bucket under scans/_runs/.
- *   3. MergeResults (Lambda): reads the Map result manifest, rolls the partials
- *      into a single run summary, and writes scans/latest/<runId>.json
- *      (runId already carries the "run-" prefix).
+ *   3. Per-account merge + BuildOrgCbom (the Go scanner in merge mode): streams
+ *      the per-(account,region) partials into the org CBOM/roadmap and writes
+ *      scans/latest/<runId>.* — including the completion-barrier summary JSON
+ *      (runId already carries the "run-" prefix). (A prior Node "MergeResults"
+ *      rollup Lambda that wrote an interim summary to the same key was removed as
+ *      redundant and over-privileged — see the note at its former site below.)
  *
  * ====================================================================
  * EVENT CONTRACT (CDK -> Go scanner Lambda) + REQUIRED FOLLOW-UP
@@ -83,8 +90,6 @@ export class OrgFanoutStack extends cdk.Stack {
   /** Seed Lambda (org-account enumeration / tuple build) — exposed so the
    *  AlertingStack can attach an operational metricErrors alarm. */
   public readonly seedFn: lambda.Function;
-  /** Merge Lambda (Map-result rollup) — exposed for the operational alarm. */
-  public readonly mergeFn: lambda.Function;
 
   constructor(scope: Construct, id: string, props: OrgFanoutStackProps) {
     super(scope, id, props);
@@ -276,6 +281,15 @@ exports.handler = async () => {
       effect: iam.Effect.ALLOW,
       actions: ['sts:AssumeRole'],
       resources: [`arn:${cdk.Aws.PARTITION}:iam::*:role/${props.scannerRoleName}`],
+      // Confine to member roles INSIDE this org — mirror of the SecurityStack
+      // AssumeMemberScannerRole condition. Without this, this second grant (which
+      // lands on the SAME orchestrator role the seed runs as) would leave an
+      // unconditioned sts:AssumeRole on the wildcard-account scanner-role ARN and,
+      // since IAM allows are a union, fully bypass that org confinement — the
+      // orchestrator could still assume a same-named role in an attacker account.
+      conditions: {
+        StringEquals: { 'aws:ResourceOrgID': props.organizationId ?? 'o-exampleorgid' },
+      },
     }));
     // Seed writes the tuple/account arrays for the S3 ItemReader.
     props.resultsBucket.grantPut(seedFn, 'scans/_seed/*');
@@ -287,79 +301,23 @@ exports.handler = async () => {
     });
 
     // ------------------------------------------------------------------
-    // Merge Lambda: roll up the Distributed Map results into a run summary.
-    // ------------------------------------------------------------------
-    const mergeFn = this.mergeFn = new lambda.Function(this, 'MergeResultsFn', {
-      runtime: lambda.Runtime.NODEJS_22_X,
-      memorySize: 512,
-      timeout: cdk.Duration.minutes(5),
-      handler: 'index.handler',
-      logGroup: new logs.LogGroup(this, 'MergeResultsFnLogs', {
-        retention: logs.RetentionDays.SIX_MONTHS,
-        removalPolicy: cdk.RemovalPolicy.DESTROY,
-      }),
-      environment: {
-        RESULTS_BUCKET: props.resultsBucket.bucketName,
-        SCANS_TABLE: props.scansTable.tableName,
-      },
-      code: lambda.Code.fromInline(`
-// Reads the Distributed Map ResultWriter manifest, aggregates child results,
-// and writes a single run summary object to the central results bucket.
-const { S3Client, GetObjectCommand, PutObjectCommand } = require('@aws-sdk/client-s3');
-const s3 = new S3Client({});
-const BUCKET = process.env.RESULTS_BUCKET;
-
-const stream2str = async (s) => { const c=[]; for await (const x of s) c.push(x); return Buffer.concat(c).toString('utf-8'); };
-
-const getJson = async (bucket, key) => {
-  const out = await s3.send(new GetObjectCommand({ Bucket: bucket, Key: key }));
-  return JSON.parse(await stream2str(out.Body));
-};
-
-exports.handler = async (event) => {
-  // The Distributed Map ResultWriter passes resultWriterDetails.{Bucket,Key}
-  // pointing at manifest.json, which lists the SUCCEEDED_<n>.json / FAILED_<n>.json
-  // result files. Each result file is an array of branch executions; each branch's
-  // .Output is a JSON STRING (the scanner Lambda's LambdaResponse, lowercase keys:
-  // accountId, region, findings, critical, assets).
-  const details = event.resultWriterDetails || {};
-  const manifestBucket = details.Bucket || BUCKET;
-  const runId = event.runId || (event.mapRunArn || '').split(':').pop() || 'unknown';
-  let totalFindings = 0, totalCritical = 0, totalAssets = 0, succeeded = 0, failed = 0;
-  const perAccount = [];
-
-  let resultKeys = [];
-  if (details.Key) {
-    const manifest = await getJson(manifestBucket, details.Key);
-    const rf = (manifest.ResultFiles) || {};
-    resultKeys = [...(rf.SUCCEEDED||[]), ...(rf.PENDING||[])].map(f => f.Key);
-    failed += (rf.FAILED||[]).reduce((n,f)=> n + (f.Size>2?1:0), 0);
-  }
-
-  for (const key of resultKeys) {
-    const branches = await getJson(manifestBucket, key); // array of branch executions
-    for (const b of branches) {
-      if (b.Status && b.Status !== 'SUCCEEDED') { failed++; continue; }
-      let o = {};
-      try { o = JSON.parse(b.Output || '{}'); } catch (e) { failed++; continue; }
-      totalFindings += o.findings || 0;
-      totalCritical += o.critical || 0;
-      totalAssets   += o.assets   || 0;
-      succeeded++;
-      perAccount.push({ accountId: o.accountId, region: o.region, assets: o.assets||0, findings: o.findings||0, critical: o.critical||0, s3Key: o.s3Key });
-    }
-  }
-
-  const summary = { runId, generatedAt: new Date().toISOString(), accountsRegionsScanned: succeeded + failed, succeeded, failed, totalFindings, totalCritical, totalAssets, perAccount };
-  await s3.send(new PutObjectCommand({ Bucket: BUCKET, Key: \`scans/latest/\${runId}.json\`, Body: JSON.stringify(summary), ContentType: 'application/json' }));
-  return summary;
-};
-      `),
-    });
-    props.resultsBucket.grantReadWrite(mergeFn);
-    props.scansTable.grantReadData(mergeFn);
-    props.dataKey.grantEncryptDecrypt(mergeFn);
-
+    // NOTE: a Node "MergeResultsFn" rollup Lambda used to live here, invoked as
+    // the summaryTask between ScanFanout and the per-account merge. It has been
+    // REMOVED as redundant and over-privileged:
+    //   * Redundant — it wrote scans/latest/<runId>.json, the EXACT key the Go
+    //     merge (BuildOrgCbom / mergedKeys, lambda_merge_core.go) overwrites later
+    //     in the same state-machine run, so its output never survived. The Go
+    //     summary is also strictly better: it carries the completion-barrier
+    //     fields (complete/incomplete/missing/failed shards) the Node rollup
+    //     lacked, and its failed-count was itself buggy (it counted FAILED
+    //     manifest FILES, not executions, and folded PENDING files as successes).
+    //   * Over-privileged — it held grantReadWrite on the evidence bucket
+    //     (s3:DeleteObject* + PutObjectLegalHold/PutObjectRetention, exactly what
+    //     ScannerStack's tamper-evidence stance withholds) and full DynamoDB read
+    //     on the scans table via a SCANS_TABLE env var its code never referenced.
+    // Deleting the function removes both over-grants and one interim artifact that
+    // could momentarily present a decimated run as clean. The Go merge is the sole
+    // producer of scans/latest/<runId>.*.
     // ------------------------------------------------------------------
     // Distributed Map child: invoke the scanner Lambda for one tuple.
     // The scanner Lambda assumes the member role (roleArn + externalId) and
@@ -428,19 +386,10 @@ exports.handler = async (event) => {
       executionType: sfn.ProcessorType.STANDARD,
     });
 
-    // Counts summary (lightweight Node rollup over the Map manifest) — fast,
-    // and writes scans/latest/<runId>.json with per-account totals
-    // (runId already carries the "run-" prefix).
-    const summaryTask = new tasks.LambdaInvoke(this, 'MergeResults', {
-      lambdaFunction: mergeFn,
-      payloadResponseOnly: true,
-      resultPath: '$.summary',
-      payload: sfn.TaskInput.fromObject({
-        'runId.$': '$.seed.runId',
-        'mapRunArn.$': '$.mapResult.mapRunArn',
-        'resultWriterDetails.$': '$.mapResult.resultWriterDetails',
-      }),
-    });
+    // (The lightweight Node counts-summary task was removed with MergeResultsFn
+    // above; the Go merge below is the sole producer of scans/latest/<runId>.*,
+    // and it emits the richer completion-barrier summary. The pipeline goes
+    // straight from the scan fan-out into the per-account merge.)
 
     // ------------------------------------------------------------------
     // HIERARCHICAL MERGE — tier 1: per-account merge Distributed Map.
@@ -519,6 +468,14 @@ exports.handler = async (event) => {
         // gap (silently-vanished / tolerated-failed shards) in the coverage output
         // instead of reporting a clean, smaller result.
         'expectedShards.$': '$.seed.expectedShards',
+        // Region-discovery barrier (docs/SCALING.md §6 Bug B): accounts whose
+        // enabled-region enumeration (AssumeRole/DescribeRegions) failed in the
+        // seed were scanned over FALLBACK_REGIONS only — their coverage is NOT
+        // guaranteed complete. Without threading this into the merge, an
+        // all-region org scan would be marked complete=true after a discovery
+        // failure. The merge folds each such account into FailedShards and
+        // forces complete=false.
+        'regionDiscoveryFailedAccounts.$': '$.seed.regionDiscoveryFailedAccounts',
       }),
     });
     orgCbomTask.addRetry({
@@ -530,7 +487,6 @@ exports.handler = async (event) => {
 
     const definition = seedTask
       .next(scanFanout)
-      .next(summaryTask)
       .next(accountMergeFanout)
       .next(orgCbomTask);
 
@@ -574,8 +530,16 @@ exports.handler = async (event) => {
     }));
     props.scannerFn.grantInvoke(this.stateMachine);
     seedFn.grantInvoke(this.stateMachine);
-    mergeFn.grantInvoke(this.stateMachine);
-    props.resultsBucket.grantReadWrite(this.stateMachine);
+    // The state machine's own S3 needs (Distributed Map ItemReader GetObject on
+    // seed keys + ResultWriterV2 PutObject under scans/_runs/ and
+    // scans/_account_merge_runs/) are already covered by CDK's automatic
+    // per-DistributedMap self-grant. grantReadWrite would ADDITIONALLY hand this
+    // role s3:DeleteObject* + PutObjectLegalHold/PutObjectRetention on every
+    // object in the evidence bucket — a second role able to erase/lock the
+    // tamper-evidence store, with no consumer (nothing in the definition performs
+    // those calls). Grant only the KMS access the reader/writer need for the
+    // CMK-encrypted bucket; add a narrow per-prefix statement here if a future
+    // state genuinely needs more.
     props.dataKey.grantEncryptDecrypt(this.stateMachine);
 
     new cdk.CfnOutput(this, 'OrgScanStateMachineArn', { value: this.stateMachine.stateMachineArn });

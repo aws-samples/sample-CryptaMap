@@ -77,6 +77,12 @@ jobs:
         uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version-file: go.mod
+          # go.mod pins the MINOR version (go 1.26), so this resolves to the
+          # latest 1.26.x patch. check-latest bypasses any stale patch in the
+          # runner tool cache so std-library security fixes (e.g. a 1.26.x bump)
+          # are picked up automatically and the govulncheck gate stays green
+          # without editing go.mod on every Go security release.
+          check-latest: true
           cache: true
 
       # The Go job intentionally does NOT run `npm ci` in cdk/, so the
@@ -89,7 +95,7 @@ jobs:
         run: go vet ./internal/... ./pkg/... ./cmd/...
 
       - name: go test (GOPACKAGES) with coverage
-        run: go test ./internal/... ./pkg/... -cover
+        run: go test ./internal/... ./pkg/... ./cmd/... -cover
 
       # Single-source-of-truth guard: the dashboard TS types are generated from
       # the Go wire structs by `go run ./cmd/gen-ts`. Regenerate and fail if the
@@ -173,6 +179,15 @@ jobs:
       - name: go build -tags lambda (org fan-out handler)
         run: go build -tags lambda ./cmd/cryptamap/
 
+      # Dependency-vulnerability scan: govulncheck cross-references the Go module
+      # dependency graph AND the reachable call graph against the Go vulnerability
+      # database (vuln.go.dev), so it only fails on advisories that actually reach
+      # code this module calls. It is run from the module root over all packages so
+      # a vulnerable transitive dependency can never land silently. Pinned via the
+      # @latest module query at invocation time (no new go.mod dependency).
+      - name: govulncheck (Go dependency vulnerability scan)
+        run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+
   dashboard:
     name: Dashboard build
     runs-on: ubuntu-latest
@@ -192,6 +207,13 @@ jobs:
 
       - name: npm ci
         run: npm ci
+
+      # Dependency-vulnerability scan of the shipped (non-dev) dashboard tree.
+      # --omit=dev excludes build-only tooling; --audit-level=high fails the job
+      # only on high/critical advisories so a vulnerable runtime dependency can
+      # never land silently.
+      - name: npm audit (dashboard runtime deps)
+        run: npm audit --omit=dev --audit-level=high
 
       - name: npm run build
         run: npm run build
@@ -216,8 +238,37 @@ jobs:
       - name: npm ci
         run: npm ci
 
+      # Dependency-vulnerability scan of the shipped (non-dev) CDK tree.
+      # --omit=dev excludes build-only tooling; --audit-level=high fails the job
+      # only on high/critical advisories so a vulnerable runtime dependency can
+      # never land silently.
+      - name: npm audit (cdk runtime deps)
+        run: npm audit --omit=dev --audit-level=high
+
       # `npm run build` is `tsc` (TypeScript compile). It does not touch the
       # vendored cdk/node_modules "%name%.template.go" file, which only affects
       # `go build ./...` (handled in the Go job, which omits cdk node_modules).
       - name: npm run build
         run: npm run build
+
+      # ExternalId / org-scanning regression guard (fix H5), synth-only.
+      # Asserts four security invariants of the CDK app:
+      #   0. `-c orgScanningEnabled=false` (a STRING from the CLI) actually
+      #      disables the org fan-out (no string-"false"-is-truthy fail-open);
+      #   1. org synth with the public default ExternalId is REFUSED;
+      #   2. org synth with no alertEmail is REFUSED (silent-alerts guard;
+      #      -c allowSilentAlerts=true is the explicit demo/eval escape hatch);
+      #   3. org synth with a private ExternalId succeeds AND the
+      #      LocalScannerRole trust carries the aws:PrincipalOrgID +
+      #      sts:ExternalId confused-deputy conditions.
+      # The scanner Lambda's Code.fromAsset needs dist/lambda to exist at the
+      # repo root; synth only hashes the asset, so an empty placeholder file is
+      # sufficient (no Go build required in this job). The guard script uses
+      # `set -euo pipefail` and exits nonzero on any violated invariant, which
+      # fails this job — it is a hard gate, not advisory.
+      - name: ExternalId guard (org-scanning trust invariants, synth-only)
+        working-directory: .
+        run: |
+          mkdir -p dist/lambda
+          touch dist/lambda/bootstrap
+          bash cdk/test/externalid-guard.sh

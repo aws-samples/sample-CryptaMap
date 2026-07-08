@@ -96,7 +96,19 @@ export class ScannerStack extends cdk.Stack {
       resources: [props.resultsBucket.arnForObjects('*')],
     }));
     props.resultsBucket.grantRead(this.scannerFn);
-    props.scansTable.grantReadWriteData(this.scannerFn);
+    // Tamper-evidence: the scanner only ever writes scan records with PutItem
+    // (internal/output/dynamodb_writer.go PutScan → dynamodb:PutItem; there is no
+    // GetItem/Query/Delete/Update/BatchWrite anywhere in the Go code). grantReadWriteData
+    // additionally hands out dynamodb:DeleteItem/UpdateItem/BatchWriteItem, which would
+    // let the scanner/orchestrator role ERASE or alter scan records — the DynamoDB
+    // counterpart of the no-DeleteObject S3 stance above. Grant exactly PutItem so the
+    // "append-only evidence" guarantee holds on the table too.
+    this.scannerFn.addToRolePolicy(new iam.PolicyStatement({
+      sid: 'CryptaMapScansPutOnlyNoTamper',
+      effect: iam.Effect.ALLOW,
+      actions: ['dynamodb:PutItem'],
+      resources: [props.scansTable.tableArn],
+    }));
     props.dataKey.grantEncryptDecrypt(this.scannerFn);
 
     // Read-only discovery permissions.

@@ -20,6 +20,9 @@ type fakeDocumentDBTransitClient struct {
 	clusterPages []*docdb.DescribeDBClustersOutput
 	clusterCalls int
 	clustersErr  error
+	// clusterFilters records the Filters sent on each DescribeDBClusters call so
+	// tests can assert the server-side engine filter is always applied.
+	clusterFilters [][]docdbtypes.Filter
 
 	instancePages []*docdb.DescribeDBInstancesOutput
 	instanceCalls int
@@ -32,6 +35,7 @@ type fakeDocumentDBTransitClient struct {
 }
 
 func (f *fakeDocumentDBTransitClient) DescribeDBClusters(ctx context.Context, in *docdb.DescribeDBClustersInput, optFns ...func(*docdb.Options)) (*docdb.DescribeDBClustersOutput, error) {
+	f.clusterFilters = append(f.clusterFilters, in.Filters)
 	if f.clustersErr != nil {
 		return nil, f.clustersErr
 	}
@@ -100,6 +104,7 @@ func TestDocumentDBTransitScanPaginatesClusters(t *testing.T) {
 			{
 				DBClusters: []docdbtypes.DBCluster{{
 					DBClusterIdentifier:     documentdbtransitStrptr("cluster-page1"),
+					Engine:                  documentdbtransitStrptr("docdb"),
 					DBClusterParameterGroup: documentdbtransitStrptr("default.docdb5.0"),
 				}},
 				Marker: documentdbtransitStrptr("marker-page2"),
@@ -107,6 +112,7 @@ func TestDocumentDBTransitScanPaginatesClusters(t *testing.T) {
 			{
 				DBClusters: []docdbtypes.DBCluster{{
 					DBClusterIdentifier:     documentdbtransitStrptr("cluster-page2"),
+					Engine:                  documentdbtransitStrptr("docdb"),
 					DBClusterParameterGroup: documentdbtransitStrptr("default.docdb5.0"),
 				}},
 				// no Marker -> last page
@@ -161,6 +167,7 @@ func TestDocumentDBTransitTLSDisabledIsNoEncryption(t *testing.T) {
 		clusterPages: []*docdb.DescribeDBClustersOutput{{
 			DBClusters: []docdbtypes.DBCluster{{
 				DBClusterIdentifier:     documentdbtransitStrptr("cluster-plaintext"),
+				Engine:                  documentdbtransitStrptr("docdb"),
 				DBClusterParameterGroup: documentdbtransitStrptr("custom-pg"),
 			}},
 		}},
@@ -198,6 +205,7 @@ func TestDocumentDBTransitTLSEnabledIsClassical(t *testing.T) {
 		clusterPages: []*docdb.DescribeDBClustersOutput{{
 			DBClusters: []docdbtypes.DBCluster{{
 				DBClusterIdentifier:     documentdbtransitStrptr("cluster-tls"),
+				Engine:                  documentdbtransitStrptr("docdb"),
 				DBClusterParameterGroup: documentdbtransitStrptr("custom-pg"),
 			}},
 		}},
@@ -233,6 +241,7 @@ func TestDocumentDBTransitDefaultGroupIsEnforced(t *testing.T) {
 		clusterPages: []*docdb.DescribeDBClustersOutput{{
 			DBClusters: []docdbtypes.DBCluster{{
 				DBClusterIdentifier:     documentdbtransitStrptr("cluster-default"),
+				Engine:                  documentdbtransitStrptr("docdb"),
 				DBClusterParameterGroup: documentdbtransitStrptr("default.docdb5.0"),
 			}},
 		}},
@@ -260,6 +269,7 @@ func TestDocumentDBTransitUnreadableTLSIsUnknown(t *testing.T) {
 		clusterPages: []*docdb.DescribeDBClustersOutput{{
 			DBClusters: []docdbtypes.DBCluster{{
 				DBClusterIdentifier:     documentdbtransitStrptr("cluster-opaque"),
+				Engine:                  documentdbtransitStrptr("docdb"),
 				DBClusterParameterGroup: documentdbtransitStrptr("custom-pg"),
 			}},
 		}},
@@ -290,6 +300,7 @@ func TestDocumentDBTransitJoinsCertFromInstances(t *testing.T) {
 		clusterPages: []*docdb.DescribeDBClustersOutput{{
 			DBClusters: []docdbtypes.DBCluster{{
 				DBClusterIdentifier:     documentdbtransitStrptr("cluster-cert"),
+				Engine:                  documentdbtransitStrptr("docdb"),
 				DBClusterParameterGroup: documentdbtransitStrptr("default.docdb5.0"),
 			}},
 		}},
@@ -325,5 +336,104 @@ func TestDocumentDBTransitJoinsCertFromInstances(t *testing.T) {
 	}
 	if a.Properties == nil || a.Properties["posture"] != string(models.PostureNonPQCClassical) {
 		t.Errorf("default-group ECC cluster must be posture %q, got %q", models.PostureNonPQCClassical, a.Properties["posture"])
+	}
+}
+
+// TestDocumentDBTransitSendsEngineFilter verifies the shared-control-plane
+// honesty contract at the API level: every DescribeDBClusters call must carry
+// the engine=docdb server-side filter, because the shared RDS control plane
+// otherwise returns RDS/Aurora/Neptune clusters that this scanner must never
+// stamp with DocumentDB's TLS verdict.
+func TestDocumentDBTransitSendsEngineFilter(t *testing.T) {
+	client := &fakeDocumentDBTransitClient{
+		clusterPages: []*docdb.DescribeDBClustersOutput{
+			{
+				DBClusters: []docdbtypes.DBCluster{{
+					DBClusterIdentifier:     documentdbtransitStrptr("cluster-a"),
+					Engine:                  documentdbtransitStrptr("docdb"),
+					DBClusterParameterGroup: documentdbtransitStrptr("default.docdb5.0"),
+				}},
+				Marker: documentdbtransitStrptr("marker-page2"),
+			},
+			{
+				DBClusters: []docdbtypes.DBCluster{{
+					DBClusterIdentifier:     documentdbtransitStrptr("cluster-b"),
+					Engine:                  documentdbtransitStrptr("docdb"),
+					DBClusterParameterGroup: documentdbtransitStrptr("default.docdb5.0"),
+				}},
+			},
+		},
+	}
+	_, err := DocumentDBTransitScanner{}.scan(context.Background(), client, "111122223333", "us-east-1")
+	if err != nil {
+		t.Fatalf("scan returned unexpected error: %v", err)
+	}
+	if len(client.clusterFilters) != 2 {
+		t.Fatalf("expected 2 DescribeDBClusters calls, got %d", len(client.clusterFilters))
+	}
+	for i, filters := range client.clusterFilters {
+		found := false
+		for _, f := range filters {
+			if f.Name != nil && *f.Name == "engine" && len(f.Values) == 1 && f.Values[0] == "docdb" {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("DescribeDBClusters call %d missing the engine=docdb server-side filter: %+v", i, filters)
+		}
+	}
+}
+
+// TestDocumentDBTransitSkipsForeignEngines is the defence-in-depth honesty
+// assertion behind the server-side filter: if the shared RDS control plane
+// still returns a foreign (aurora/neptune) or engine-less cluster, the scanner
+// must NOT emit it — stamping DocumentDB's "TLS enforced" verdict on an engine
+// it never inspected would be a fabricated verdict.
+func TestDocumentDBTransitSkipsForeignEngines(t *testing.T) {
+	client := &fakeDocumentDBTransitClient{
+		clusterPages: []*docdb.DescribeDBClustersOutput{{
+			DBClusters: []docdbtypes.DBCluster{
+				{
+					DBClusterIdentifier:     documentdbtransitStrptr("aurora-foreign"),
+					Engine:                  documentdbtransitStrptr("aurora-postgresql"),
+					DBClusterParameterGroup: documentdbtransitStrptr("default.aurora-postgresql15"),
+				},
+				{
+					DBClusterIdentifier:     documentdbtransitStrptr("neptune-foreign"),
+					Engine:                  documentdbtransitStrptr("neptune"),
+					DBClusterParameterGroup: documentdbtransitStrptr("default.neptune1.3"),
+				},
+				{
+					DBClusterIdentifier:     documentdbtransitStrptr("engineless"),
+					DBClusterParameterGroup: documentdbtransitStrptr("default.docdb5.0"),
+					// Engine nil: unprovable -> must be skipped, not stamped.
+				},
+				{
+					DBClusterIdentifier:     documentdbtransitStrptr("docdb-real"),
+					Engine:                  documentdbtransitStrptr("docdb"),
+					DBClusterParameterGroup: documentdbtransitStrptr("default.docdb5.0"),
+				},
+			},
+		}},
+	}
+	assets, err := DocumentDBTransitScanner{}.scan(context.Background(), client, "111122223333", "us-east-1")
+	if err != nil {
+		t.Fatalf("scan returned unexpected error: %v", err)
+	}
+	if len(assets) != 1 {
+		t.Fatalf("expected exactly 1 asset (the docdb cluster), got %d: %+v", len(assets), assets)
+	}
+	got := documentdbtransitAssetByID(assets)
+	for _, foreign := range []string{"aurora-foreign", "neptune-foreign", "engineless"} {
+		if _, ok := got[foreign]; ok {
+			t.Errorf("foreign/engine-less cluster %q must NOT be emitted by the documentdb scanner", foreign)
+		}
+	}
+	a, ok := got["docdb-real"]
+	if !ok {
+		t.Fatal("expected the real docdb cluster to be emitted")
+	}
+	if p := documentdbtransitPostureOf(a); p != string(models.PostureNonPQCClassical) {
+		t.Errorf("docdb cluster on immutable default group must be posture %q, got %q", models.PostureNonPQCClassical, p)
 	}
 }

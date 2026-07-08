@@ -8,7 +8,6 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
-	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 
 	"github.com/aws-samples/cryptamap/pkg/models"
 )
@@ -37,12 +36,13 @@ func (w *S3Writer) PutCBOM(ctx context.Context, scan models.ScanResult) (string,
 		return "", err
 	}
 	key := Key(w.Prefix, scan.AccountID, scan.Region, scan.ScanID)
+	// No explicit ServerSideEncryption: uploads inherit the bucket's default
+	// encryption configuration (e.g. the bucket's CMK).
 	_, err = w.Client.PutObject(ctx, &s3.PutObjectInput{
-		Bucket:               aws.String(w.Bucket),
-		Key:                  aws.String(key),
-		Body:                 bytes.NewReader(body),
-		ContentType:          aws.String("application/json"),
-		ServerSideEncryption: types.ServerSideEncryptionAes256,
+		Bucket:      aws.String(w.Bucket),
+		Key:         aws.String(key),
+		Body:        bytes.NewReader(body),
+		ContentType: aws.String("application/json"),
 	})
 	if err != nil {
 		return "", fmt.Errorf("S3 PutObject %s/%s: %w", w.Bucket, key, err)
@@ -58,11 +58,10 @@ func (w *S3Writer) PutLatest(ctx context.Context, scan models.ScanResult) (strin
 	}
 	key := fmt.Sprintf("%slatest/%s-%s.json", w.Prefix, scan.AccountID, scan.Region)
 	_, err = w.Client.PutObject(ctx, &s3.PutObjectInput{
-		Bucket:               aws.String(w.Bucket),
-		Key:                  aws.String(key),
-		Body:                 bytes.NewReader(body),
-		ContentType:          aws.String("application/json"),
-		ServerSideEncryption: types.ServerSideEncryptionAes256,
+		Bucket:      aws.String(w.Bucket),
+		Key:         aws.String(key),
+		Body:        bytes.NewReader(body),
+		ContentType: aws.String("application/json"),
 	})
 	return key, err
 }
@@ -71,11 +70,10 @@ func (w *S3Writer) PutLatest(ctx context.Context, scan models.ScanResult) (strin
 func (w *S3Writer) PutBytes(ctx context.Context, key string, body []byte, contentType string) (string, error) {
 	fullKey := w.Prefix + key
 	_, err := w.Client.PutObject(ctx, &s3.PutObjectInput{
-		Bucket:               aws.String(w.Bucket),
-		Key:                  aws.String(fullKey),
-		Body:                 bytes.NewReader(body),
-		ContentType:          aws.String(contentType),
-		ServerSideEncryption: types.ServerSideEncryptionAes256,
+		Bucket:      aws.String(w.Bucket),
+		Key:         aws.String(fullKey),
+		Body:        bytes.NewReader(body),
+		ContentType: aws.String(contentType),
 	})
 	return fullKey, err
 }

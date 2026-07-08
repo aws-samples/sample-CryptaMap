@@ -95,9 +95,15 @@ func classifyAppStreamCertAuth(accountID, region, dirName string, cba *asTypes.C
 	case asTypes.CertificateBasedAuthStatusEnabledNoDirectoryLoginFallback:
 		a.Properties["passwordFallbackAllowed"] = "false"
 		a.Properties["note"] = "AppStream certificate-based authentication is ENABLED (cert-only, no AD-password fallback): workforce VDI access requires classical X.509 client certificates issued by an ACM Private CA (quantum-vulnerable RSA/ECDSA; the CA key is classified by the acmpca scanner)."
-	default: // DISABLED (or any future unknown value)
+	case asTypes.CertificateBasedAuthStatusDisabled:
 		a.Properties["passwordFallbackAllowed"] = "true"
 		a.Properties["note"] = "AppStream certificate-based authentication is configured but DISABLED on this directory; classical X.509 client-cert trust is not currently enforced. Recorded for inventory only (this is auth/cert custody, not at-rest encryption)."
+	default:
+		// A future/unrecognized status (AWS already extended this enum once,
+		// with ENABLED_NO_DIRECTORY_LOGIN_FALLBACK). Do NOT assert whether
+		// enforcement or password fallback is in effect — describing a future
+		// ENABLED-variant as "disabled" would be a wrong factual statement.
+		a.Properties["note"] = "AppStream certificate-based authentication reports an unrecognized status " + string(status) + "; enforcement and password-fallback behavior are not asserted. Recorded for inventory only (this is auth/cert custody, not at-rest encryption)."
 	}
 	return a, true
 }

@@ -115,9 +115,13 @@ func TestACMPCAScanPostureHonesty(t *testing.T) {
 		{"rsa-classical", "RSA_2048", models.PostureNonPQCClassical},
 		{"ec-classical", "EC_prime256v1", models.PostureNonPQCClassical},
 		{"mldsa-pqc", "ML_DSA_65", models.PosturePQCReady},
-		// An unknown/unmapped algorithm must still be a classical key posture,
-		// never silently dropped or reported as having no encryption.
-		{"unknown-algo", "SM2", models.PostureNonPQCClassical},
+		// SM2 is a classical elliptic-curve algorithm; mapped explicitly.
+		{"sm2-classical", "SM2", models.PostureNonPQCClassical},
+		// An unrecognized algorithm (e.g. a future AWS PQC enum such as
+		// SLH-DSA) must be reported Unknown, never a confident classical
+		// verdict — a false-classical would label a PQC-safe CA as
+		// quantum-vulnerable. Mirrors acmPosture in acm.go.
+		{"unknown-future-algo", "SLH_DSA_SHA2_128S", models.PostureUnknown},
 	}
 	for _, tc := range cases {
 		t.Run(tc.acmpcaName, func(t *testing.T) {
@@ -139,6 +143,15 @@ func TestACMPCAScanPostureHonesty(t *testing.T) {
 			}
 			if got == "" || got == string(models.PostureNoEncryption) {
 				t.Errorf("key algo %q: a CA always has a signing key and must never be no-encryption; got %q", tc.acmpcaKeyAlgo, got)
+			}
+			// Provenance honesty: the supported-key-algos doc stamp may only
+			// appear on verdicts the doc actually backs — never on Unknown.
+			_, stamped := assets[0].Properties["docFact"]
+			if tc.acmpcaWant == models.PostureUnknown && stamped {
+				t.Errorf("key algo %q: doc-fact stamp attached to an Unknown verdict the doc does not back", tc.acmpcaKeyAlgo)
+			}
+			if tc.acmpcaWant != models.PostureUnknown && !stamped {
+				t.Errorf("key algo %q: expected doc-fact provenance on a doc-backed verdict", tc.acmpcaKeyAlgo)
 			}
 		})
 	}

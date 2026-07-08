@@ -154,7 +154,7 @@ to avoid the common positional-argument mistakes:
 | Scan every enabled region | `./dist/cryptamap --regions all --output-dir ./out` |
 | Serve your scan locally | `cryptamap serve --dir ./out` |
 | Merge per-account CBOMs offline | `cryptamap org-merge-files --in './out-acct1/*.cbom.json,./out-acct2/*.cbom.json' -o ./org-out` |
-| Deploy org fan-out (Path 3) | `cd cdk && npx cdk deploy CryptaMap-OrgFanout --exclusively -c orgScanningEnabled=true -c organizationId=<ORG_ID> -c orgRootId=<ROOT_ID> -c scannerExternalId=<EXTERNAL_ID>` |
+| Deploy org fan-out (Path 3) | `cd cdk && npx cdk deploy --all -c orgScanningEnabled=true -c organizationId=<ORG_ID> -c orgRootId=<ROOT_ID> -c scannerExternalId=<EXTERNAL_ID>` |
 
 > **`serve` takes `--dir`, not a positional path**, and **`org-merge-files` takes
 > `--in`, not positional files** — running either with a bare path silently serves
@@ -225,15 +225,18 @@ setup](./DEPLOYMENT.md#cross-account-role-prerequisite)** for what the role is, 
 double-gated trust, and the copy-paste JSON.
 
 ```bash
-make build-cli   # builds the Lambda bootstrap + CDK assets via make deploy's deps
+make build-lambda build-cdk   # Lambda bootstrap (dist/lambda) + CDK assets
 
-# Deploy the org fan-out. orgScanningEnabled MUST be set or you get a
-# single-account scheduled scan, NOT org-wide coverage (see warning below).
-cd cdk && npx cdk deploy CryptaMap-OrgFanout --exclusively \
+# Deploy the org fan-out — ALL stacks, because orgScanningEnabled=true changes
+# the Security/Scanner stacks too (orchestrator role, role swap, StackSet).
+# orgScanningEnabled MUST be set or you get a single-account scheduled scan,
+# NOT org-wide coverage (see warning below).
+cd cdk && npx cdk deploy --all \
   -c orgScanningEnabled=true \
   -c organizationId=<ORG_ID> \
   -c orgRootId=<ROOT_ID> \
-  -c scannerExternalId=<EXTERNAL_ID>
+  -c scannerExternalId=<EXTERNAL_ID> \
+  -c alertEmail=<OPS_EMAIL>
 ```
 
 > Where these come from: `<ORG_ID>` / `<ROOT_ID>` are your AWS Organizations id and
@@ -259,6 +262,17 @@ cd cdk && npx cdk deploy CryptaMap-OrgFanout --exclusively \
 > single-account path (`orgScanningEnabled:false`) nothing is refused because no org
 > scanning happens. So the guard protects the org path; it does not "bless" a
 > defaults-only run.
+
+> **Org scanning also requires a notification target.** `alertEmail` defaults to
+> empty (`cdk.json`), which leaves the alarms/cost-budget SNS topic with no
+> subscriber. So when `orgScanningEnabled=true`, synth **refuses** to deploy unless
+> you pass **`-c alertEmail=<ops-email>`** — otherwise the operational alarms
+> (scanner/seed errors, state-machine failure/timeout) and the monthly cost budget
+> would fire into a subscriber-less topic and nobody would be notified if an
+> org-wide scan silently broke or ran up cost. For a demo/eval synth where you
+> deliberately want no subscriber, add **`-c allowSilentAlerts=true`** to bypass this
+> guard. (Like the org-id refusals above, this check only fires when
+> `orgScanningEnabled=true`.)
 
 What the org fan-out does once deployed:
 
@@ -468,8 +482,21 @@ CodeDeploy, Cloud9.
 
 CryptaMap implements `Risk = X + Y - Z` with Indian BFSI-calibrated defaults
 (X = 7-10y data shelf-life, Y = 1-3y migration time, Z = 3y CRQC horizon).
-Per-service defaults live in `internal/risk/defaults.go`; users override via the
-YAML config under `risk.mosca.overrides`.
+Per-service defaults live in `internal/risk/defaults.go`; CLI users override
+them per service via the YAML config under `risk.mosca.overrides` (keys are
+service identifiers such as `rds` or `s3`; fields map `data_shelf_life_years` → X,
+`migration_time_years` → Y, `threat_timeline_years` → Z). Fields left unset
+(or ≤ 0) keep that service's built-in default, and a fully-zero override entry
+is ignored. The Lambda deployment does not read a YAML config file and always
+uses the built-in defaults.
+
+```yaml
+risk:
+  mosca:
+    overrides:
+      rds:
+        data_shelf_life_years: 15   # X only; Y and Z keep the rds defaults
+```
 
 | Mosca score | Severity        |
 | ----------- | --------------- |
@@ -511,7 +538,9 @@ national (CERT-In CIWP-2025-0002), not a per-regulator mandate.
 --config, -c <path>           YAML config file
 --regions, -r us-east-1,ap-south-1
 --accounts, -a 111122223333   specific account IDs (org mode only)
---org                         enable AWS Organizations cross-account scanning
+--org                         NOT honored by the CLI scan path — warns and scans
+                              only the caller account; org-wide scanning is the
+                              deployed Step Functions fan-out (Path 3)
 --org-merge                   merge all scanned regions/accounts into one
                               org-wide CBOM + PQC roadmap + coverage matrix
 --mock                        synthesize mock data (no AWS calls)
@@ -532,14 +561,21 @@ Per region (always), plus a single merged set when `--org-merge` is set:
   source-URL citation, with by-service and by-account roll-ups.
 - **MITRE PQCC Excel** (`*.pqcc.xlsx`) — Overview / Baseline Inventory / Glossary
   sheets matching the PQCC Inventory Workbook.
-- **AWS Security Hub ASFF** (`*.asff.json`) — `BatchImportFindings`-ready;
-  CRITICAL findings trigger SNS alerts via the Alerting stack.
+- **AWS Security Hub ASFF** (`*.asff.json`) — `BatchImportFindings`-ready ASFF
+  output, written as a local artifact for you to import into Security Hub. (There
+  is no built-in live push to Security Hub; the Alerting stack pages on-call for
+  operational pipeline failures — scanner/seed Lambda errors and org state-machine
+  FAILED/TIMED OUT — not on individual CRITICAL findings.)
 - **Coverage matrix** (`*-org-*.coverage.json`, `--org-merge` only) — one row per
   scanned (account, region) shard with counts and an `errored` flag, so no
   account is silently treated as clean.
 - **Raw scan dump** (`*.scan.json`) — full `ScanResult` for debugging.
-- **Markdown summary** (`*.report.md`) — CLI-friendly report; the dashboard's
-  Export button produces the regulator-grade PDF.
+- **Markdown summary** (`*.report.md`) — CLI-friendly, human-readable report. For
+  regulators, the CycloneDX CBOM above is the machine-readable deliverable; the
+  Markdown summary, offline HTML report, and any browser-exported PDF are
+  human-readable summaries of the same scan. The dashboard's **Reports &
+  downloads** page offers each of these files (CBOM, ASFF, PQCC workbook, offline
+  HTML, roadmap, coverage matrix) as a one-click download.
 
 ## Generated TypeScript types (single source of truth)
 

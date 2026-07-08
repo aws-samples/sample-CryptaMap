@@ -110,8 +110,10 @@ func TestClassifySESDKIM(t *testing.T) {
 				"signing is NOT enabled",
 				"signing), not encryption",
 			},
-			wantPrimitive: models.PrimitiveSignature,
-			wantAlgo:      "RSA",
+			// HONEST BLANK: signing is disabled, so no RSA algorithm block may
+			// be fabricated — nothing was read that says RSA for an identity
+			// with no active signing surface.
+			wantAlgo: "",
 		},
 		{
 			// nil DkimAttributes: degrade safely to Unknown, no crash, no all-clear.
@@ -128,8 +130,8 @@ func TestClassifySESDKIM(t *testing.T) {
 				"no DKIM attributes",
 				"signing), not encryption",
 			},
-			wantPrimitive: models.PrimitiveSignature,
-			wantAlgo:      "RSA",
+			// HONEST BLANK: DKIM is not configured at all — no algorithm block.
+			wantAlgo: "",
 		},
 	}
 
@@ -148,19 +150,31 @@ func TestClassifySESDKIM(t *testing.T) {
 				t.Errorf("posture = %q, want %q", got, c.wantPosture)
 			}
 
-			// Always a classical RSA SIGNATURE surface, regardless of enabled state.
-			if a.CryptoProps.AlgorithmProperties == nil {
-				t.Fatalf("AlgorithmProperties is nil; expected a signature block")
-			}
-			if got := a.CryptoProps.AlgorithmProperties.Primitive; got != c.wantPrimitive {
-				t.Errorf("primitive = %q, want %q", got, c.wantPrimitive)
-			}
-			if got := a.CryptoProps.AlgorithmProperties.AlgorithmName; got != c.wantAlgo {
-				t.Errorf("algorithmName = %q, want %q", got, c.wantAlgo)
-			}
-			// Classical signature => no NIST PQ level.
-			if got := a.CryptoProps.AlgorithmProperties.NistQuantumSecurityLevel; got != 0 {
-				t.Errorf("nistQuantumSecurityLevel = %d, want 0 (classical RSA)", got)
+			// The RSA signature block is asserted ONLY when signing is enabled;
+			// a disabled/unconfigured identity must carry an honest blank (no
+			// fabricated RSA SignatureAlgorithmRef/AlgorithmProperties for a
+			// surface that does not exist).
+			if c.wantAlgo == "" {
+				if a.CryptoProps.AlgorithmProperties != nil {
+					t.Errorf("AlgorithmProperties = %+v, want nil (no fabricated algorithm block without an active signing surface)", a.CryptoProps.AlgorithmProperties)
+				}
+				if a.CryptoProps.CertificateProperties != nil && a.CryptoProps.CertificateProperties.SignatureAlgorithmRef != "" {
+					t.Errorf("SignatureAlgorithmRef = %q, want empty for a disabled/unconfigured DKIM identity", a.CryptoProps.CertificateProperties.SignatureAlgorithmRef)
+				}
+			} else {
+				if a.CryptoProps.AlgorithmProperties == nil {
+					t.Fatalf("AlgorithmProperties is nil; expected a signature block")
+				}
+				if got := a.CryptoProps.AlgorithmProperties.Primitive; got != c.wantPrimitive {
+					t.Errorf("primitive = %q, want %q", got, c.wantPrimitive)
+				}
+				if got := a.CryptoProps.AlgorithmProperties.AlgorithmName; got != c.wantAlgo {
+					t.Errorf("algorithmName = %q, want %q", got, c.wantAlgo)
+				}
+				// Classical signature => no NIST PQ level.
+				if got := a.CryptoProps.AlgorithmProperties.NistQuantumSecurityLevel; got != 0 {
+					t.Errorf("nistQuantumSecurityLevel = %d, want 0 (classical RSA)", got)
+				}
 			}
 
 			// Exact resource shape.

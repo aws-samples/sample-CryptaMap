@@ -1,8 +1,6 @@
 // Package risk implements Mosca's Theorem and severity classification.
 package risk
 
-import "github.com/aws-samples/cryptamap/pkg/models"
-
 // MoscaParams captures inputs to the X+Y-Z formula.
 type MoscaParams struct {
 	X int // data shelf-life in years
@@ -84,22 +82,8 @@ func DefaultParams(service string) MoscaParams {
 	return MoscaParams{X: 5, Y: 1, Z: 3}
 }
 
-// CategoryFor returns the cryptamap Category for a service.
-func CategoryFor(service string) models.Category {
-	switch service {
-	case "alb", "nlb", "apigw_rest", "apigw_http", "cloudfront",
-		"elasticache_transit", "documentdb_transit", "rds_transit", "aurora_transit",
-		"opensearch_transit", "msk_transit", "redshift_transit", "neptune_transit",
-		"eks", "ecs", "lambda", "appsync", "iotcore", "transferfamily",
-		"vpn", "directconnect", "globalaccelerator":
-		return models.CategoryDataInTransit
-	case "acm", "acmpca", "iam_certs", "cloudfront_certs", "iot_certs":
-		return models.CategoryCertificate
-	case "kms", "cloudhsm", "secrets_rotation", "kms_spec", "kms_usage", "kms_rotation":
-		return models.CategoryKeyManagement
-	case "lambda_runtime", "container_images", "ec2_ssm":
-		return models.CategorySDKLibrary
-	default:
-		return models.CategoryDataAtRest
-	}
-}
+// NOTE: a dead CategoryFor helper (zero callers) was deleted: its
+// default-to-CategoryDataAtRest branch would have assigned a definite category
+// to services it did not know (e.g. signing surfaces), a latent
+// verdict-honesty hazard if ever wired. Category assignment lives with the
+// scanners/taxonomy, which know their own category.

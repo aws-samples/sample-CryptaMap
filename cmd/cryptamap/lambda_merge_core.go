@@ -209,6 +209,14 @@ type missingAccount struct {
 type accountBarrier struct {
 	expectedAccounts int
 	missingAccounts  []missingAccount
+	// regionDiscoveryFailed carries the seed's region-discovery failure signal
+	// (LambdaEvent.RegionDiscoveryFailedAccounts) into the completion barrier:
+	// accounts whose enabled-region enumeration failed and were scanned over the
+	// static fallback regions only, so their true region coverage is unknown.
+	// Each becomes a FailedShards row (region "*") and forces Complete=false —
+	// an all-region org scan must never be marked complete after a discovery
+	// failure (docs/SCALING.md §6 Bug B). Empty on a clean run / legacy replay.
+	regionDiscoveryFailed []string
 }
 
 // accountIDs returns just the sorted account IDs of the barrier's missing
@@ -239,6 +247,20 @@ func buildMergeArtifacts(res merge.Result, runID string, expectedShards int, acc
 	// Built first so it can be returned to the caller (runMergeMode) for the
 	// incompleteness banner/log even on a later render error.
 	summary := buildMergeSummary(res, runID, keys, expectedShards, acctBarrier)
+
+	// Surface the completion barrier into the merged ScanResult so the CBOM and
+	// roadmap writers stamp cryptamap:incomplete + the shard reconciliation counts
+	// into their metadata. Without this the incompleteness signal lives ONLY in the
+	// side-car summary JSON and stderr — an auditor handed just the canonical CBOM
+	// could not tell a decimated org scan from a clean one.
+	res.Merged.Coverage = &models.MergeCoverage{
+		Complete:       summary.Complete,
+		Incomplete:     summary.Incomplete,
+		ExpectedShards: summary.ExpectedShards,
+		ObservedShards: summary.ObservedShards,
+		MissingShards:  summary.MissingShards,
+		FailedShards:   len(summary.FailedShards),
+	}
 
 	// Merged org-wide CBOM (CycloneDX), reusing output.WriteCBOM verbatim.
 	var cbomBuf bytes.Buffer
@@ -362,6 +384,18 @@ func buildMergeSummary(res merge.Result, runID string, keys mergedArtifactKeys, 
 		complete = missing == 0
 	}
 
+	// Errored-shard barrier: shards that landed but whose scanners reported
+	// service-scan errors (recorded above as failedShards with a per-tuple reason)
+	// are partial coverage, so any of them forces complete=false. Without this a
+	// run where every shard lands but scanners fail inside them would report
+	// Complete=true / Incomplete=false and never fire the loud-incomplete banner —
+	// exactly the "partial CBOM that looks complete" the loud-incomplete design
+	// exists to prevent. The failedShards rows are already populated in the
+	// coverage loop; this only flips the top-level flag.
+	if failed > 0 {
+		complete = false
+	}
+
 	// Per-account barrier: a tier-1 per-account merge whose object failed to
 	// fetch/decode was recorded (not aborted on) by runMergeMode and carried here.
 	// Any such account decimates the org report, so it forces complete=false even
@@ -379,6 +413,23 @@ func buildMergeSummary(res merge.Result, runID string, keys mergedArtifactKeys, 
 				AccountID: ma.accountID,
 				Region:    "*",
 				Reason:    reason,
+			})
+		}
+	}
+
+	// Region-discovery barrier: the seed could not enumerate these accounts'
+	// enabled regions (AssumeRole/DescribeRegions failed), so they were scanned
+	// over the static fallback regions only — their enabled-region coverage is
+	// UNKNOWN even though every fallback shard may have landed cleanly. Force
+	// complete=false and name each account so an all-region org scan is never
+	// reported complete after a region-discovery failure (docs/SCALING.md §6 Bug B).
+	if len(acctBarrier.regionDiscoveryFailed) > 0 {
+		complete = false
+		for _, id := range acctBarrier.regionDiscoveryFailed {
+			failedShards = append(failedShards, failedShard{
+				AccountID: id,
+				Region:    "*",
+				Reason:    "region discovery (AssumeRole/DescribeRegions) failed; only fallback regions were scanned — enabled-region coverage unknown",
 			})
 		}
 	}

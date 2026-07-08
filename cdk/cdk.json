@@ -6,14 +6,9 @@
   },
   "context": {
     "@aws-cdk/aws-iam:minimizePolicies": true,
-    "@aws-cdk/core:newStyleStackSynthesis": true,
     "@aws-cdk/aws-s3:serverAccessLogsUseBucketPolicy": true,
-    "@aws-cdk/aws-cloudfront:defaultSecurityPolicyTLSv1.2_2021": true,
-    "@aws-cdk/aws-lambda:recognizeVersionProps": true,
-    "@aws-cdk/aws-cloudfront:enableLatestPriceClassDefault": true,
     "@aws-cdk/aws-stepfunctions:useDistributedMapResultWriterV2": true,
     "orgScanningEnabled": false,
-    "cognitoEnabled": true,
     "alertEmail": "",
     "monthlyBudgetUSD": 100,
     "scanSchedule": "cron(0 6 ? * SUN *)",
@@ -23,7 +18,6 @@
     "organizationId": "o-exampleorgid",
     "scannerExternalId": "cryptamap-scanner",
     "stackSetCallAs": "DELEGATED_ADMIN",
-    "fanoutRegions": "us-east-1,ap-south-1",
-    "dashboardOrigin": ""
+    "fanoutRegions": "us-east-1,ap-south-1"
   }
 }

@@ -68,6 +68,11 @@ func (s ClientVPNScanner) scan(ctx context.Context, client clientVPNEC2API, cert
 				"https://docs.aws.amazon.com/vpn/latest/clientvpn-admin/client-authentication.html")
 			a := services.NewAsset("clientvpn", models.CategoryDataInTransit, accountID, region, id, "AWS::EC2::ClientVpnEndpoint", props)
 			services.PostureProperty(&a, models.PostureNonPQCClassical)
+			// TLSProtocolPropsDoc only marks the protocol block's Source; the
+			// asset-level confidence/sourceUrl must be stamped explicitly or the
+			// doc-derived verdict ships with no citation at all.
+			services.StampDocFact(&a, "high",
+				"https://docs.aws.amazon.com/vpn/latest/clientvpn-admin/client-authentication.html", "")
 			if ep.TransportProtocol != "" {
 				a.Properties["transportProtocol"] = string(ep.TransportProtocol)
 			}

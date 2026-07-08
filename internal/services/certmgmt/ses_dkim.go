@@ -106,16 +106,26 @@ func (s SESDKIMScanner) Scan(ctx context.Context, cfg aws.Config) ([]models.Cryp
 // Easy-DKIM / AWS holds the key, EXTERNAL = BYODKIM / customer-supplied) are
 // recorded as evidence; neither changes the algorithm classification.
 func classifySESDKIM(accountID, region, name string, identityType sesv2types.IdentityType, dkim *sesv2types.DkimAttributes) models.CryptoAsset {
-	// DKIM is a signature surface. Shape the asset as a classical signature
-	// (mirrors signer.go) regardless of enabled state; posture then reflects
-	// whether that surface is active.
-	props := services.CertProps(name, "", "RSA", time.Time{}, time.Time{})
-	if props.AlgorithmProperties == nil {
-		props.AlgorithmProperties = &models.AlgorithmProperties{}
+	// DKIM is a signature surface, but the concrete RSA algorithm block is only
+	// asserted when signing is actually ENABLED: for a disabled/unconfigured
+	// identity nothing was read that says RSA, and a populated
+	// SignatureAlgorithmRef would fabricate a definite RSA signature asset for
+	// an identity with no signing surface (honest-blank rule, mirrors
+	// cloudfront_certs.go's empty certRef).
+	signingEnabled := dkim != nil && dkim.SigningEnabled
+	sigAlgo := ""
+	if signingEnabled {
+		sigAlgo = "RSA"
 	}
-	props.AlgorithmProperties.Primitive = models.PrimitiveSignature
-	props.AlgorithmProperties.AlgorithmName = "RSA"
-	props.AlgorithmProperties.NistQuantumSecurityLevel = 0
+	props := services.CertProps(name, "", sigAlgo, time.Time{}, time.Time{})
+	if signingEnabled {
+		if props.AlgorithmProperties == nil {
+			props.AlgorithmProperties = &models.AlgorithmProperties{}
+		}
+		props.AlgorithmProperties.Primitive = models.PrimitiveSignature
+		props.AlgorithmProperties.AlgorithmName = "RSA"
+		props.AlgorithmProperties.NistQuantumSecurityLevel = 0
+	}
 
 	a := services.NewAsset("ses_dkim", models.CategoryCertificate, accountID, region, name, "AWS::SES::EmailIdentity", props)
 	if identityType != "" {

@@ -234,16 +234,35 @@ func TestAppMeshHonestyPostureLadder(t *testing.T) {
 	}
 }
 
+// appmeshPropOf returns the named property of the asset with the given resource
+// ID, or "" if the asset or property is absent.
+func appmeshPropOf(assets []models.CryptoAsset, id, prop string) string {
+	for _, a := range assets {
+		if a.ResourceID == id {
+			return a.Properties[prop]
+		}
+	}
+	return ""
+}
+
 // TestAppMeshWeakestListenerWins verifies that a node with multiple listeners is
-// reported at its WEAKEST listener posture: a STRICT + a DISABLED listener on the
-// same node must surface as NoEncryption, not the STRICT (over-clean) reading.
+// reported at its WEAKEST listener posture — a STRICT + a DISABLED listener on
+// the same node must surface as NoEncryption, not the STRICT (over-clean)
+// reading — in BOTH listener orders, and that the listenerTlsMode label stays in
+// lockstep with the weakest-wins posture: the [DISABLED, STRICT] order must
+// report mode "DISABLED" alongside no-encryption, never a later stronger
+// listener's "STRICT" (which would pair a clean-looking mode with an alarming
+// posture).
 func TestAppMeshWeakestListenerWins(t *testing.T) {
 	client := &fakeAppMeshClient{
 		meshPages: []*appmesh.ListMeshesOutput{
 			{Meshes: []amtypes.MeshRef{{MeshName: appmeshStrptr("mesh-1")}}},
 		},
 		vnPages: []*appmesh.ListVirtualNodesOutput{
-			{VirtualNodes: []amtypes.VirtualNodeRef{{VirtualNodeName: appmeshStrptr("vn-mixed")}}},
+			{VirtualNodes: []amtypes.VirtualNodeRef{
+				{VirtualNodeName: appmeshStrptr("vn-mixed")},
+				{VirtualNodeName: appmeshStrptr("vn-mixed-reversed")},
+			}},
 		},
 		describeByNode: map[string]*appmesh.DescribeVirtualNodeOutput{
 			"vn-mixed": {
@@ -256,6 +275,18 @@ func TestAppMeshWeakestListenerWins(t *testing.T) {
 					},
 				},
 			},
+			// Reversed order: DISABLED first, STRICT second. The weakest posture
+			// AND its mode label must survive the later, stronger listener.
+			"vn-mixed-reversed": {
+				VirtualNode: &amtypes.VirtualNodeData{
+					Spec: &amtypes.VirtualNodeSpec{
+						Listeners: []amtypes.Listener{
+							{Tls: &amtypes.ListenerTls{Mode: amtypes.ListenerTlsModeDisabled}},
+							{Tls: &amtypes.ListenerTls{Mode: amtypes.ListenerTlsModeStrict}},
+						},
+					},
+				},
+			},
 		},
 	}
 	assets, err := AppMeshScanner{}.scan(context.Background(), client, "111122223333", "us-east-1")
@@ -264,6 +295,15 @@ func TestAppMeshWeakestListenerWins(t *testing.T) {
 	}
 	if got := appmeshPostureOf(assets, "vn-mixed"); got != string(models.PostureNoEncryption) {
 		t.Errorf("mixed-listener node must report the WEAKEST posture (no-encryption), got %q", got)
+	}
+	if got := appmeshPropOf(assets, "vn-mixed", "listenerTlsMode"); got != "DISABLED" {
+		t.Errorf("vn-mixed: listenerTlsMode=%q, want DISABLED (mode label must track the weakest-wins posture, not the stronger STRICT listener)", got)
+	}
+	if got := appmeshPostureOf(assets, "vn-mixed-reversed"); got != string(models.PostureNoEncryption) {
+		t.Errorf("[DISABLED, STRICT] node must report the WEAKEST posture (no-encryption), got %q", got)
+	}
+	if got := appmeshPropOf(assets, "vn-mixed-reversed", "listenerTlsMode"); got != "DISABLED" {
+		t.Errorf("vn-mixed-reversed: listenerTlsMode=%q, want DISABLED (a later STRICT listener must not overwrite the weakest listener's mode)", got)
 	}
 }
 

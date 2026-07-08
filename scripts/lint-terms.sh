@@ -106,7 +106,7 @@ is_allowlisted() {
     dashboard/src/lib/posture.ts)
       # posture map KEY 'quantum-safe' is the EXEMPT wire-value enum (mirrors (1));
       # only the displayed VALUE label was reworded to "quantum-resistant". KEEP key.
-      case "$line" in "'quantum-safe': { label: 'AES-256 — quantum-resistant', indicator: 'success' },") return 0 ;; esac ;;
+      case "$line" in "'quantum-safe': { label: 'Symmetric — quantum-resistant', indicator: 'success' },") return 0 ;; esac ;;
     internal/pqc/data/pqc-knowledge.json)
       [ "$line" = '"strength": "quantum-safe",' ] && return 0 ;;
     internal/roadmap/roadmap_test.go)

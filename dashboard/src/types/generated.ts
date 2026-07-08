@@ -102,6 +102,16 @@ export interface ServiceScanReport {
   durationMs: number;
 }
 
+/** pkg/models/scan.go MergeCoverage. */
+export interface MergeCoverage {
+  complete: boolean;
+  incomplete: boolean;
+  expectedShards: number;
+  observedShards: number;
+  missingShards: number;
+  failedShards: number;
+}
+
 /** pkg/models/scan.go ScanResult. */
 export interface ScanResult {
   scanId: string;
@@ -115,6 +125,7 @@ export interface ScanResult {
   findings: Finding[];
   serviceStats?: ServiceScanReport[];
   toolVersion: string;
+  coverage?: MergeCoverage;
 }
 
 /** pkg/models/scan.go MultiScanResult. */
@@ -175,6 +186,8 @@ export interface ProtocolProperties {
   certSignatureAlgorithm?: string;
   certKeySizeBits?: number;
   source?: string;
+  docConfidence?: string;
+  docSourceUrl?: string;
   tlsMinVersion?: string;
 }
 
@@ -324,5 +337,6 @@ export interface Roadmap {
   items: RoadmapItem[];
   byService: ServiceRollup[];
   byAccount: AccountRollup[];
+  coverage?: MergeCoverage;
 }
 

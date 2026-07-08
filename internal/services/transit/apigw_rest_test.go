@@ -158,6 +158,29 @@ func TestAPIGWRestScanRestApisErrorPropagates(t *testing.T) {
 	}
 }
 
+// TestAPIGWRestScanDomainNamesErrorPropagates verifies the no-silent-drop
+// posture for the domain walk (mirrors apigw_http): a GetDomainNames failure
+// (denied/rate-limited) must make the scan VISIBLY incomplete by returning a
+// non-nil error — NOT a clean-looking success missing every custom domain (the
+// pre-fix behavior logged to stderr and broke out of the loop).
+func TestAPIGWRestScanDomainNamesErrorPropagates(t *testing.T) {
+	sentinel := errors.New("AccessDeniedException: not authorized to perform apigateway:GET")
+	client := &fakeAPIGWRestClient{
+		apisPages: []*apigw.GetRestApisOutput{
+			{Items: []apigwtypes.RestApi{{Id: apigwrestStrptr("rest-1")}}},
+		},
+		domainsErr: sentinel,
+	}
+	resolver := newACMCertResolver(aws.Config{})
+	_, err := APIGWRestScanner{}.scan(context.Background(), client, resolver, "111122223333", "us-east-1")
+	if err == nil {
+		t.Fatal("expected scan to return a non-nil error when GetDomainNames fails, got nil (silent empty success)")
+	}
+	if !errors.Is(err, sentinel) {
+		t.Errorf("expected returned error to wrap the GetDomainNames failure, got: %v", err)
+	}
+}
+
 // TestAPIGWRestExecuteApiNotFalseClean asserts the honesty posture for the
 // default execute-api endpoint: API Gateway's managed endpoint supports a TLS
 // 1.0 floor per AWS docs, so the REST API baseline asset must NOT assert a clean
@@ -189,20 +212,35 @@ func TestAPIGWRestExecuteApiNotFalseClean(t *testing.T) {
 // TestAPIGWRestSecurityPolicyHonesty exercises secPolicyToVersion across the
 // domains that matter for transit honesty: a PQ-hybrid TLS 1.2-floor policy must
 // NOT overstate its floor as 1.3, a PQ TLS-1.3-only policy is a true 1.3 floor,
-// a legacy TLS_1_0 policy is flagged (never clean), and a plain TLS_1_2 policy is
-// classical (not PQC). Each yields a sane TLS floor on the emitted domain asset.
+// a legacy TLS_1_0 policy is flagged (never clean), plain TLS_1_2 is classical
+// (not PQC), the documented 2025 EDGE enum values map to their doc-stated floors,
+// and — critically — an UNRECOGNIZED policy name must yield PostureUnknown with
+// NO fabricated "1.2" floor (the pre-fix fallback stamped any future/unknown
+// policy as a clean classical 1.2). Each yields the expected TLS floor on the
+// emitted domain asset; the Unknown case also carries an explanatory note.
 func TestAPIGWRestSecurityPolicyHonesty(t *testing.T) {
 	cases := []struct {
 		name        string
 		policy      string
 		wantVer     string
 		wantPosture models.CryptoPosture
+		wantNote    bool
 	}{
-		{"pq-1.2-floor-not-overstated", "TLS13_1_2_2025_09_PQ_2025_09", "1.2", models.PosturePQCHybrid},
-		{"pq-1.3-only-true-floor", "TLS13_1_3_2025_09_PQ_2025_09", "1.3", models.PosturePQCHybrid},
-		{"legacy-tls10-flagged", "TLS_1_0", "1.0", models.PostureLegacyTLS},
-		{"classical-tls12", "TLS_1_2", "1.2", models.PostureNonPQCClassical},
-		{"classical-tls13", "TLS_1_3", "1.3", models.PostureNonPQCClassical},
+		{"pq-1.2-floor-not-overstated", "SecurityPolicy_TLS13_1_2_PQ_2025_09", "1.2", models.PosturePQCHybrid, false},
+		{"pq-1.2-fips-pfs", "SecurityPolicy_TLS13_1_2_FIPS_PFS_PQ_2025_09", "1.2", models.PosturePQCHybrid, false},
+		{"pq-1.3-only-true-floor", "TLS13_1_3_2025_09_PQ_2025_09", "1.3", models.PosturePQCHybrid, false},
+		{"legacy-tls10-flagged", "TLS_1_0", "1.0", models.PostureLegacyTLS, false},
+		{"classical-tls12", "TLS_1_2", "1.2", models.PostureNonPQCClassical, false},
+		{"classical-tls13", "TLS_1_3", "1.3", models.PostureNonPQCClassical, false},
+		{"non-pq-1.3-only-regional", "SecurityPolicy_TLS13_1_3_2025_09", "1.3", models.PostureNonPQCClassical, false},
+		{"non-pq-1.3-only-fips", "SecurityPolicy_TLS13_1_3_FIPS_2025_09", "1.3", models.PostureNonPQCClassical, false},
+		{"edge-2025-tls13-only", "SecurityPolicy_TLS13_2025_EDGE", "1.3", models.PostureNonPQCClassical, false},
+		{"edge-2025-pfs-1.2-floor", "SecurityPolicy_TLS12_PFS_2025_EDGE", "1.2", models.PostureNonPQCClassical, false},
+		{"edge-2018-1.2-floor", "SecurityPolicy_TLS12_2018_EDGE", "1.2", models.PostureNonPQCClassical, false},
+		{"regional-2021-1.2-floor", "SecurityPolicy_TLS13_1_2_2021_06", "1.2", models.PostureNonPQCClassical, false},
+		// Unrecognized/future policy: no data proves a floor -> Unknown, never a
+		// fabricated classical "1.2" verdict.
+		{"unrecognized-policy-unknown", "SecurityPolicy_FUTURE_2030_11", "", models.PostureUnknown, true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -236,6 +274,10 @@ func TestAPIGWRestSecurityPolicyHonesty(t *testing.T) {
 			}
 			if floor := apigwrestTLSFloorOf(a); floor != tc.wantVer {
 				t.Errorf("domain TLS floor for %q = %q, want %q", tc.policy, floor, tc.wantVer)
+			}
+			hasNote := a.Properties != nil && a.Properties["note"] != ""
+			if hasNote != tc.wantNote {
+				t.Errorf("domain note presence for %q = %v, want %v (an UNKNOWN verdict must say what could not be read)", tc.policy, hasNote, tc.wantNote)
 			}
 		})
 	}

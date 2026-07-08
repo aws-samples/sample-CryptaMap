@@ -136,9 +136,12 @@ func TestKMSSpecScanListKeysErrorPropagates(t *testing.T) {
 }
 
 // TestKMSSpecScanPerKeyDescribeErrorDropsOnlyThatKey verifies a DescribeKey error
-// on one key does not fail the whole scan and does not silently drop the OTHER
-// healthy keys — only the errored key is absent. (Per the scanner's documented
-// behavior, a DescribeKey error drops that single key.)
+// on one key does not fail the whole scan and does not silently drop ANY key:
+// the healthy sibling is classified normally and the errored key is STILL
+// emitted with PostureUnknown (never silently absent), matching the
+// no-silent-drop doctrine kms_rotation implements for the identical failure.
+// Previously the errored key vanished from the inventory with only an stderr
+// line — a partial deny/throttle silently under-counted the key estate.
 func TestKMSSpecScanPerKeyDescribeErrorDropsOnlyThatKey(t *testing.T) {
 	client := &fakeKMSSpecClient{
 		listPages: []*kms.ListKeysOutput{
@@ -162,8 +165,12 @@ func TestKMSSpecScanPerKeyDescribeErrorDropsOnlyThatKey(t *testing.T) {
 	if _, ok := got["key-ok"]; !ok {
 		t.Error("expected the healthy key-ok to survive a sibling DescribeKey error")
 	}
-	if _, ok := got["key-denied"]; ok {
-		t.Error("expected the DescribeKey-errored key-denied to be dropped, but it appeared")
+	denied, ok := got["key-denied"]
+	if !ok {
+		t.Fatalf("expected the DescribeKey-errored key-denied to STILL be emitted (no silent drop); assets=%v", kmsspecKeysOfMap(got))
+	}
+	if p := denied.Properties["posture"]; p != string(models.PostureUnknown) {
+		t.Errorf("DescribeKey-errored key: expected Unknown posture (honestly unclassified), got %q", p)
 	}
 }
 

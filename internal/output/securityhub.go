@@ -7,6 +7,7 @@ import (
 	"io"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/aws-samples/cryptamap/pkg/models"
 )
@@ -16,10 +17,11 @@ import (
 // any of these is rejected by BatchImportFindings, so we clamp variable-length
 // fields at emit time. These match the documented maxima exactly.
 const (
-	asffMaxID          = 512  // Id
-	asffMaxTitle       = 256  // Title
-	asffMaxDescription = 1024 // Description
-	asffMaxTypes       = 50   // Types array entries
+	asffMaxID             = 512  // Id
+	asffMaxTitle          = 256  // Title
+	asffMaxDescription    = 1024 // Description
+	asffMaxTypes          = 50   // Types array entries
+	asffMaxRecommendation = 512  // Remediation.Recommendation.Text (Url has no documented cap)
 )
 
 // asffTruncate clamps a free-text field (Title/Description) to max runes,
@@ -46,7 +48,38 @@ func asffTruncateID(id string) string {
 	h := fnv.New32a()
 	_, _ = h.Write([]byte(id))
 	suffix := fmt.Sprintf("~%08x", h.Sum32()) // 9 chars
-	return id[:asffMaxID-len(suffix)] + suffix
+	// Back the cut off to a rune boundary so a multi-byte UTF-8 sequence
+	// straddling the byte limit is dropped whole rather than split — a split
+	// rune would emit invalid UTF-8 in Id, which Security Hub may reject
+	// (same rationale as the rune-safe asffTruncate above).
+	cut := asffMaxID - len(suffix)
+	for cut > 0 && !utf8.RuneStart(id[cut]) {
+		cut--
+	}
+	return id[:cut] + suffix
+}
+
+// asffStableFindingKey returns the deterministic per-finding discriminator used
+// as the last segment of the ASFF Id. It must be stable across scan runs for
+// the same (resource, finding): Security Hub correlates BatchImportFindings by
+// Id, so a run-scoped value here (the previous code used models.Finding.ID,
+// which is a fresh uuid.NewString() every run) makes every re-import create a
+// brand-new duplicate finding instead of updating the existing one.
+//
+// Preferred key is AssetBomRef, which is already deterministic (BomRefForARN =
+// FNV-64a of the resource ARN, the same key org-wide dedup uses) and unique per
+// discovered asset. When it is absent (e.g. hand-built findings), fall back to
+// an FNV-64a hash of the stable identity fields (service|type|ARN) so the key
+// is still reproducible run-over-run. The finding posture/severity are
+// deliberately NOT part of the key: a posture change on the same asset should
+// UPDATE the existing Security Hub finding, not spawn a second one.
+func asffStableFindingKey(f models.Finding) string {
+	if f.AssetBomRef != "" {
+		return f.AssetBomRef
+	}
+	h := fnv.New64a()
+	_, _ = h.Write([]byte(f.Service + "|" + f.ResourceType + "|" + f.ResourceARN))
+	return fmt.Sprintf("f-%016x", h.Sum64())
 }
 
 // PartitionForRegion returns the AWS partition that owns a region, derived from
@@ -197,8 +230,13 @@ func BuildASFFFinding(f models.Finding, productArn string) ASFFFinding {
 	}
 	return ASFFFinding{
 		SchemaVersion: "2018-10-08",
-		// Clamp to the documented 512-char Id limit, preserving uniqueness.
-		ID: asffTruncateID(fmt.Sprintf("cryptamap/%s/%s/%s/%s", f.AccountID, f.Region, f.ResourceID, f.ID)),
+		// Deterministic Id: the last segment is a stable per-asset
+		// key (AssetBomRef, or an FNV hash of the identity fields as fallback),
+		// NOT the run-scoped models.Finding.ID uuid — Security Hub keys on Id,
+		// so a per-run uuid duplicated every finding on each re-import instead
+		// of updating in place. Clamped to the documented 512-char Id limit,
+		// preserving uniqueness (asffTruncateID appends a hash of the full id).
+		ID: asffTruncateID(fmt.Sprintf("cryptamap/%s/%s/%s/%s", f.AccountID, f.Region, f.ResourceID, asffStableFindingKey(f))),
 		// Substitute the ${ACCOUNT}/${REGION} placeholders from the default
 		// ProductArn template with this finding's real account/region — the
 		// account segment must equal AwsAccountId for BatchImportFindings.
@@ -217,7 +255,10 @@ func BuildASFFFinding(f models.Finding, productArn string) ASFFFinding {
 		Description: asffTruncate(f.Description, asffMaxDescription),
 		Remediation: ASFFRemediation{
 			Recommendation: ASFFRecommendation{
-				Text: f.Recommendation,
+				// Clamp to the documented 512-char Recommendation.Text limit —
+				// an over-length remediation text causes BatchImportFindings to
+				// reject the whole finding. Url has no documented length cap.
+				Text: asffTruncate(f.Recommendation, asffMaxRecommendation),
 				URL:  f.DocsURL,
 			},
 		},

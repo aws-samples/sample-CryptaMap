@@ -239,21 +239,23 @@ var acmKeyAlgorithmProfiles = map[string]CipherProfile{
 }
 
 // s3SSEAlgorithmProfiles maps S3 SSEAlgorithm enum strings to their doc-sourced
-// profile. All S3 server-side encryption modes use AES-256 (quantum resistant).
+// profile. All S3 server-side encryption modes use AES-256 (quantum resistant,
+// NIST PQC Category 5 per SymmetricNISTCategory — a prior mislabeling as
+// Category 1 was corrected here to match the KMS SYMMETRIC_DEFAULT row).
 var s3SSEAlgorithmProfiles = map[string]CipherProfile{
 	"AES256": {
 		Identifier: "AES256", AlgorithmName: "AES-256-GCM", KeySizeBits: 256,
-		ClassicalSecurityLevel: 256, NistQuantumSecurityLevel: 1,
+		ClassicalSecurityLevel: 256, NistQuantumSecurityLevel: 5, // AES-256 anchors NIST Category 5 (SymmetricNISTCategory)
 		SourceURL: docS3SSE, AsOf: cipherTableAsOf,
 	},
 	"aws:kms": {
 		Identifier: "aws:kms", AlgorithmName: "AES-256-GCM (SSE-KMS)", KeySizeBits: 256,
-		ClassicalSecurityLevel: 256, NistQuantumSecurityLevel: 1,
+		ClassicalSecurityLevel: 256, NistQuantumSecurityLevel: 5, // AES-256 anchors NIST Category 5 (SymmetricNISTCategory)
 		SourceURL: docS3SSE, AsOf: cipherTableAsOf,
 	},
 	"aws:kms:dsse": {
 		Identifier: "aws:kms:dsse", AlgorithmName: "AES-256-GCM (DSSE-KMS)", KeySizeBits: 256,
-		ClassicalSecurityLevel: 256, NistQuantumSecurityLevel: 1,
+		ClassicalSecurityLevel: 256, NistQuantumSecurityLevel: 5, // AES-256 anchors NIST Category 5 (SymmetricNISTCategory)
 		SourceURL: docS3SSE, AsOf: cipherTableAsOf,
 	},
 }

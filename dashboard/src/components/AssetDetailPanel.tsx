@@ -76,6 +76,33 @@ function deepProp(row: AssetRow, key: string): string | undefined {
   return getProp(row.component, `cryptamap:${key}`);
 }
 
+// redactCryptoProperties returns a deep copy of a cryptoProperties object with
+// any potentially-secret VALUES replaced by the same withheld marker the
+// friendly "Value" row uses (RD-3 key-material mask). CycloneDX defines
+// relatedCryptoMaterialProperties.value as the material's value — i.e.
+// potentially real key/secret bytes. A producer should not put secrets there,
+// but a viewer must not amplify a producer's mistake, and the raw JSON dump is
+// captured verbatim into exported PDFs. The redaction recurses over the whole
+// object and masks any key matching the sensitive-name set, for defense in
+// depth against future nested sensitive fields — keeping this dump consistent
+// with the masked row rather than a bypass of it.
+const SENSITIVE_RAW_KEYS = /^(value|secret|token|privateKey)$/;
+function redactCryptoProperties(v: unknown): unknown {
+  if (Array.isArray(v)) return v.map(redactCryptoProperties);
+  if (v !== null && typeof v === 'object') {
+    const out: Record<string, unknown> = {};
+    for (const [k, val] of Object.entries(v as Record<string, unknown>)) {
+      if (SENSITIVE_RAW_KEYS.test(k) && typeof val === 'string' && val !== '') {
+        out[k] = `••• value withheld (${val.length} chars present)`;
+      } else {
+        out[k] = redactCryptoProperties(val);
+      }
+    }
+    return out;
+  }
+  return v;
+}
+
 // A KeyValuePairs item shape (label + value + optional info-slot node).
 interface KvItem {
   label: ReactNode;
@@ -174,12 +201,16 @@ export default function AssetDetailPanel({ row }: { row: AssetRow }) {
         </Box>
       </div>
 
-      {/* Raw cryptoProperties */}
+      {/* Raw cryptoProperties. NEVER dump relatedCryptoMaterialProperties.value
+          verbatim here: the friendly "Value" row below (RelatedMaterialDetail)
+          masks potential key/secret material, and this raw JSON dump must not
+          bypass that mask — the panel is also captured verbatim into exported
+          PDFs (ExportButton), which outlive dashboard access controls. */}
       {cp && (
         <ExpandableSection headerText="Raw cryptoProperties (CycloneDX)" variant="footer">
           <Box variant="code">
             <pre style={{ margin: 0, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
-              {JSON.stringify(cp, null, 2)}
+              {JSON.stringify(redactCryptoProperties(cp), null, 2)}
             </pre>
           </Box>
         </ExpandableSection>
@@ -294,7 +325,13 @@ function ProtocolDetail({ row }: { row: AssetRow }) {
   // the real negotiated group from a live handshake; every config scanner (ELB/
   // API GW PQ policies, VPN DH groups, Transfer SSH KEXs) reports the SUPPORTED/
   // PERMITTED set the policy allows, not what a given client negotiated.
-  const isNegotiated = row.service === 'cloudtrail_evidence';
+  // PQ evidence tier (declared early — it also drives the KEX label): 'confirmed'
+  // = an observed negotiated PQ handshake; 'capable' = the policy/config PERMITS
+  // PQ but real negotiation was not observed. Read the backend-stamped property
+  // (internal/output/cyclonedx.go) so label and badge share one source of truth;
+  // keep the service-id check as a fallback for older CBOMs without the property.
+  const pqEvidence = deepProp(row, 'pqEvidence');
+  const isNegotiated = pqEvidence === 'confirmed' || row.service === 'cloudtrail_evidence';
   // Deeper-detail fields live on flat cryptamap:* props on the wire (see deepProp).
   const keyExchangeGroup = deepProp(row, 'keyExchangeGroup') ?? p?.keyExchangeGroup;
   // Only qualify the label when a value is actually present, so an empty row
@@ -309,11 +346,6 @@ function ProtocolDetail({ row }: { row: AssetRow }) {
   const pqcHybridProp = deepProp(row, 'pqcHybrid');
   const pqcHybrid = pqcHybridProp === 'true' ? true : pqcHybridProp === undefined ? p?.pqcHybrid : false;
   const tlsMinVersion = deepProp(row, 'tlsMinVersion') ?? p?.tlsMinVersion;
-  // PQ evidence tier: 'confirmed' = an observed negotiated PQ handshake (only
-  // cloudtrail_evidence); 'capable' = the policy/config PERMITS PQ but real
-  // negotiation is client-dependent and was not observed. Surfaced so a PQ-hybrid
-  // claim is never read as "proven" when it is only "permitted".
-  const pqEvidence = deepProp(row, 'pqEvidence');
   return (
     <SpaceBetween size="s">
       <KeyValuePairs
@@ -479,7 +511,19 @@ function RelatedMaterialDetail({ row }: { row: AssetRow }) {
         { label: 'Format', value: show(m?.format) },
         { label: 'Algorithm ref', value: show(m?.algorithmRef) },
         field('Secured by', show(m?.securedBy), 'securedBy'),
-        { label: 'Value', value: m?.value ? <Box variant="code">{m.value}</Box> : DASH },
+        {
+          // NEVER render relatedCryptoMaterialProperties.value verbatim: CycloneDX
+          // defines it as the material's value (i.e. potentially the secret/key
+          // bytes). A producer should not put real secrets here, but a viewer must
+          // not amplify a producer's mistake — the panel is also captured verbatim
+          // into exported PDFs (ExportButton), which outlive dashboard access controls.
+          label: 'Value',
+          value: m?.value ? (
+            <Box variant="code">{`••• value withheld (${String(m.value).length} chars present)`}</Box>
+          ) : (
+            DASH
+          ),
+        },
         { label: 'Created', value: showDate(m?.creationDate) },
         { label: 'Expires', value: showDate(m?.expirationDate) },
         { label: 'Updated', value: showDate(m?.updateDate) },
@@ -524,7 +568,10 @@ function PqcReadiness({ row }: { row: AssetRow }) {
           ]}
         />
         <Box variant="small" color="text-status-inactive">
-          {pqcReasoning(row.posture, '')}
+          {/* 'not-assessed' sentinel: with no roadmap join the tool has NO knowledge
+              of PQC availability for this service — never assert "no option is
+              available yet" from absence of data. */}
+          {pqcReasoning(row.posture, 'not-assessed')}
         </Box>
       </SpaceBetween>
     );
@@ -638,6 +685,11 @@ function pqcReasoning(posture: string, pqcStatus: string): string {
     case 'legacy-tls':
       return 'Legacy TLS (≤ 1.1) is in use. Upgrade to TLS 1.2/1.3 before considering PQC hybrid key exchange.';
     case 'non-pqc-classical':
+      // 'not-assessed' = no roadmap entry: PQC availability is UNKNOWN, which is
+      // different from a known 'not-yet' — do not claim "no option is available".
+      if (pqcStatus === 'not-assessed') {
+        return 'Traditional (non-PQC) cryptography is in use; PQC availability for this service was not assessed (no roadmap entry).';
+      }
       return pqcStatus === 'available' || pqcStatus === 'hybrid-tls-only'
         ? 'Traditional (non-PQC) cryptography is in use and a post-quantum option is available for this service.'
         : 'Traditional (non-PQC) cryptography is in use; no managed post-quantum option is available yet for this service.';

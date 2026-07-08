@@ -21,9 +21,9 @@
 
 ## 1. One-page summary
 
-CryptaMap is a **single Go module** (`github.com/aws-samples/cryptamap`, `go 1.26.2`) that compiles into one binary serving three personas: a local CLI scanner, a build-tagged AWS Lambda org fan-out handler, and an offline dashboard server. Around that Go core sit two TypeScript projects (a React/Cloudscape dashboard SPA and an AWS CDK app) and a thin maintainer codegen toolchain that keeps the three projects from drifting apart.
+CryptaMap is a **single Go module** (`github.com/aws-samples/cryptamap`, `go 1.26`) that compiles into one binary serving three personas: a local CLI scanner, a build-tagged AWS Lambda org fan-out handler, and an offline dashboard server. Around that Go core sit two TypeScript projects (a React/Cloudscape dashboard SPA and an AWS CDK app) and a thin maintainer codegen toolchain that keeps the three projects from drifting apart.
 
-- **Go module root** is the repo root; `go.mod:1` declares the module and `go.mod:3` pins `go 1.26.2`.
+- **Go module root** is the repo root; `go.mod:1` declares the module and `go.mod:3` sets the minimum `go 1.26` (CI builds on the latest 1.26.x patch).
 - **Dashboard** lives under `dashboard/` — React 18 + Vite 6 + TypeScript 5 + Cloudscape (`dashboard/package.json`).
 - **Infrastructure** lives under `cdk/` — AWS CDK v2 in **TypeScript** (`cdk/package.json`), synthesizing up to 5 stacks (`cdk/bin/app.ts`).
 - **Glue:** two codegen commands (`cmd/gen-ts`, `cmd/gen-knowledge`) project the Go structs and PQC knowledge into the dashboard and the embedded data file, with CI staleness guards (`.github/workflows/ci.yml:60-71`).
@@ -36,7 +36,7 @@ CryptaMap is a **single Go module** (`github.com/aws-samples/cryptamap`, `go 1.2
 
 ```mermaid
 flowchart TB
-    subgraph Go["Go module (repo root, go 1.26.2)"]
+    subgraph Go["Go module (repo root, go 1.26)"]
         CLI["cmd/cryptamap<br/>cobra CLI · Lambda handler · serve"]
         ENG["internal/scanner engine<br/>goroutine pool + registry"]
         SCAN["99 service scanners<br/>aws-sdk-go-v2"]
@@ -75,10 +75,10 @@ The scan engine, CLI dispatch, registry, and config loader are pure Go on top of
 
 | Layer | Technology | Version | Why chosen |
 |---|---|---|---|
-| Language/runtime | **Go** | `1.26.2` | Single static cross-compiled binary for air-gap distribution; first-class goroutines for the per-service worker pool; `go:embed` lets the dashboard SPA ship inside the CLI. Pinned at `go.mod:3`. |
+| Language/runtime | **Go** | `1.26` (latest 1.26.x) | Single static cross-compiled binary for air-gap distribution; first-class goroutines for the per-service worker pool; `go:embed` lets the dashboard SPA ship inside the CLI. Minimum declared at `go.mod:3`. |
 | CLI framework | **spf13/cobra** | `v1.10.2` | Sub-command tree (`cryptamap`, `org-merge-files`, `knowledge-status`, `serve`) with typed flags and `RunE` error propagation. Root command built in `cmd/cryptamap/main.go:55-89` (`cobra.Command` at `main.go:57`). Pinned at `go.mod:84`. |
 | CLI flag parsing | **spf13/pflag** | `v1.0.9` (indirect) | POSIX flag parsing that cobra rides on. `go.mod:113`. |
-| ID generation | **google/uuid** | `v1.6.0` | Random v4 UUIDs for `scanID` and per-finding IDs — `BuildFindings` sets `ID: uuid.NewString()` at `internal/scanner/findings.go:56`. `go.mod:82`. |
+| ID generation | **google/uuid** | `v1.6.0` | Random v4 UUIDs for the per-run `scanID` only — `engine.go:165` (`scanID := uuid.NewString()`, surfaced as `ScanResult.ScanID` at `engine.go:207`) and the mock engine's `ScanID` (`mock_engine.go:38`). Finding IDs are **no longer** UUIDs: `BuildFindings` now sets a deterministic `ID = stableFindingID(a, posture)` (`internal/scanner/findings.go:76`) and `findings.go` does not import `google/uuid`. `go.mod:95`. |
 | Config format | **gopkg.in/yaml.v3** | `v3.0.1` | YAML config schema with `${VAR}` env-expansion and defaults-merge semantics (`internal/config/loader.go:101-126`). `go.mod:86`. |
 | Concurrency primitive | Go stdlib `sync` / `math/rand` | (stdlib) | `sync.RWMutex`-guarded registry (`internal/scanner/registry.go:9-12`) and the bounded goroutine pool + jittered backoff in the engine (`internal/scanner/engine.go:72-163`, backoff `engine.go:221-229`). |
 
@@ -95,11 +95,11 @@ Every per-service scanner is a thin wrapper over an `aws-sdk-go-v2` service clie
 | AWS SDK core | **aws-sdk-go-v2** | `v1.42.0` | Modular per-service clients (only the services scanned are linked); native context support; adaptive retryer that owns throttle backoff. `go.mod:8`. |
 | SDK config | **aws-sdk-go-v2/config** | `v1.32.20` | `loadAWSConfig` builds region-scoped configs with adaptive retry capped at 8 attempts (`cmd/cryptamap/main.go:406-422`). `go.mod:9`. |
 | Credentials | **aws-sdk-go-v2/credentials** | `v1.19.19` | Credential chain for CLI (caller account) and Lambda (assumed member-account role). `go.mod:10`. |
-| STS | **aws-sdk-go-v2/service/sts** | `v1.42.3` | Caller-identity resolution + cross-account `AssumeRole` (`internal/services/common.go` region-less ARN; `cmd/cryptamap/lambda.go:100-118` eager assume-role verify). `go.mod:74`. |
-| Organizations | **aws-sdk-go-v2/service/organizations** | `v1.51.6` | Account enumeration for org fan-out seeding. `go.mod:58`. |
+| STS | **aws-sdk-go-v2/service/sts** | `v1.42.3` | Caller-identity resolution + cross-account `AssumeRole` (`internal/services/common.go` region-less ARN; `cmd/cryptamap/lambda.go:100-118` eager assume-role verify). `go.mod:85`. |
+| Organizations | **aws-sdk-go-v2/service/organizations** | `v1.51.6` | Account enumeration for org fan-out seeding. `go.mod:67`. |
 | Lambda runtime | **aws-lambda-go** | `v1.54.0` | The build-tagged org fan-out handler (`//go:build lambda`, `cmd/cryptamap/lambda.go`). `go.mod:7`. |
-| SDK error classification | **aws/smithy-go** | `v1.27.1` | Typed smithy API errors so scanners can distinguish "not subscribed / not in region / unsupported op" graceful-skips from real failures (used across `datarest`, `transit/directoryservice.go`). `go.mod:81`. |
-| 90 service clients | **aws-sdk-go-v2/service/\*** | per `go.mod:11-78` | **90** direct-require service modules (counted via `grep -c 'aws-sdk-go-v2/service/'`); most are data-plane scanner clients, the rest (organizations, securityhub, sts) are orchestration/output. One module per scanned service (s3 `v1.102.2` `go.mod:65`, ec2 `v1.304.2` `:31`, kms `v1.53.0` `:50`, acm `v1.39.2` `:11`, elbv2 `v1.55.0` `:38`, rds `v1.118.4` `:61`, …). Modular linking keeps the binary lean and lets each scanner pin independently. (The coverage-expansion took the module count from 68 to 90 — the 13 new scanners added 14 modules: bedrock, bedrockagent, quicksight, kinesisanalyticsv2, eventbridge, sfn, sesv2, customerprofiles, workspacesweb, codebuild, mgn, kendra, appstream, xray.) |
+| SDK error classification | **aws/smithy-go** | `v1.27.1` | Typed smithy API errors so scanners can distinguish "not subscribed / not in region / unsupported op" graceful-skips from real failures (used across `datarest`, `transit/directoryservice.go`). `go.mod:94`. |
+| 81 service clients | **aws-sdk-go-v2/service/\*** | per `go.mod:11-91` | **81** direct-require service modules (`go.mod:11-91`); a `grep -c 'aws-sdk-go-v2/service/' go.mod` returns **89** because it also counts 8 internal/indirect SDK helper modules (`sso`, `ssooidc`, `signin`, and the `service/internal/*` helpers). Most are data-plane scanner clients, the rest (organizations, sts) are orchestration. One module per scanned service (s3 `v1.102.2` `go.mod:75`, ec2 `v1.304.2` `:36`, kms `v1.53.0` `:58`, acm `v1.39.2` `:11`, elbv2 `v1.55.0` `:43`, rds `v1.118.4` `:71`, …). Modular linking keeps the binary lean and lets each scanner pin independently. |
 
 ```mermaid
 flowchart LR
@@ -110,7 +110,7 @@ flowchart LR
     ASSET --> BF["BuildFindings (pure)"]
 ```
 
-> **What "pure" means here (and what it does NOT):** `BuildFindings` (`internal/scanner/findings.go:29-77`) is *pure/dependency-light* in that the **classification** it produces — `Posture`, `Severity`, `Mosca` score, and `Compliance` mappings — depends only on the input asset, so the offline org-merge adapter reproduces the same classification a live scan would. It is **not** byte-identical run-to-run: every call stamps a fresh random `ID: uuid.NewString()` (`findings.go:56`) and `CreatedAt`/`UpdatedAt: time.Now().UTC()` (`findings.go:30,72-73`). Any purity/equality test must exclude the UUID and the two timestamps.
+> **What "pure" means here (and what it does NOT):** `BuildFindings` (`internal/scanner/findings.go:28-97`) is *pure/dependency-light* in that the **classification** it produces — `Posture`, `Severity`, `Mosca` score, and `Compliance` mappings — depends only on the input asset, so the offline org-merge adapter reproduces the same classification a live scan would. It is **not** byte-identical run-to-run, but the only volatile fields are the timestamps: every call stamps one per-call `CreatedAt`/`UpdatedAt: time.Now().UTC()` (`findings.go:29,92-93`). `Finding.ID` is now the **deterministic** content key `stableFindingID(a, posture)` (`findings.go:76`), so it is stable across runs. Any purity/equality test may rely on the stable `ID` and need only exclude the two timestamps.
 >
 > **Note — severity is not an unconditional worse-of:** `Severity` previously was the unconditional worse-of(posture-derived, Mosca/HNDL-derived), which over-alarmed quantum-resistant assets (e.g. an AES-256 RDS/DynamoDB asset surfaced as CRITICAL purely on HNDL urgency). It is now `risk.SeverityFromPosture(posture)`, and the Mosca/HNDL bump (`HighestSeverity(..., SeverityFromMosca(...))`) is applied **only when `!risk.IsQuantumResistantPosture(posture)`** (`findings.go:46-50`; `IsQuantumResistantPosture` true for symmetric-only / pqc-hybrid / pqc-ready at `internal/risk/severity.go:42`). Genuinely vulnerable postures (no-encryption / legacy-tls / non-pqc-classical / unknown) keep the worse-of semantics unchanged. The classification stays deterministic-per-asset, so the purity note above still holds.
 
@@ -127,7 +127,7 @@ The output layer turns `[]CryptoAsset` + `[]Finding` into the report formats reg
 | MITRE PQCC Excel | **xuri/excelize/v2** | `v2.10.1` | Generates the MITRE PQCC migration-inventory `.pqcc.xlsx` workbook (`internal/output/pqcc_excel.go:9,66`). Pure-Go XLSX writer (no Office/COM dependency) so it works in the air-gapped CLI. `go.mod:85`. Transitive Excel deps: `richardlehane/mscfb` `v1.0.6`, `msoleps` `v1.0.6`, `xuri/efp` `v0.0.1`, `xuri/nfp` `v0.0.2-…` (`go.mod:111-116`). |
 | HTML report | Go stdlib `html/template` | (stdlib) | Self-contained `.report.html` written by `internal/output/html_report.go` — no JS framework, opens offline. |
 | Markdown (PDF path) | **yuin/goldmark** | `v1.7.16` (indirect) | Markdown rendering pulled transitively; the `--pdf`/`.report.md` path emits Markdown (`internal/output/pdf_writer.go`, written by `cmd/cryptamap/main.go:216-316`). `go.mod:117`. |
-| ASFF / Security Hub | **aws-sdk-go-v2/service/securityhub** | `v1.71.2` | Findings exported as ASFF for Security Hub (`internal/output/securityhub.go`, `securityhub_writer.go`). `go.mod:68`. |
+| ASFF / Security Hub | in-repo (hand-built ASFF JSON) | n/a | Findings exported as an ASFF (`.asff.json`) file for Security Hub import — the ASFF structs are authored in-repo and marshaled with stdlib `encoding/json` (`BuildASFFFindings`/`WriteASFF`, `internal/output/securityhub.go:182,289`), then validated against the documented `BatchImportFindings` field-length/enum contract (`internal/output/asff_validate.go:99,264`). There is **no** `aws-sdk-go-v2/service/securityhub` module dependency and no live Security Hub API call — the file is a local JSON export the operator uploads. |
 | Risk scoring | in-repo (Mosca's Theorem) | n/a | `internal/risk` computes `Score = X+Y-Z` (`mosca.go:12-23`) with per-service Indian-BFSI defaults (`defaults.go:14-85`); no external dependency. |
 
 The CLI's `writeArtifacts` fans these formats out per `(account, region)` result (`cmd/cryptamap/main.go:216-316`): `.cbom.json`, `.pqcc.xlsx`, `.report.html`, `.asff.json`, `.scan.json`, optional `.report.md`, and `.roadmap.json/.md`.
@@ -136,7 +136,7 @@ The CLI's `writeArtifacts` fans these formats out per `(account, region)` result
 
 The dashboard is a separate TypeScript project under `dashboard/`. Its built bundle is embedded into the CLI (`cmd/cryptamap/web_embed.go:18`, `//go:embed all:webdist`; `var webDist embed.FS` at `:19`) and served loopback-only by `cryptamap serve` (`cmd/cryptamap/serve.go:38-104`).
 
-> **The committed `webdist/` is a PLACEHOLDER, not the real SPA.** Per the comment at `web_embed.go:8-13`, the file checked into `cmd/cryptamap/webdist` is a stub `index.html` only — the real Vite output lives in `dashboard/dist`, which is outside `cmd/cryptamap`, so `go:embed` cannot reach it. A plain `make build-cli` / `go build` therefore embeds only the placeholder, and `cryptamap serve` from that binary renders a stub shell (and `serve.go:183` even errors `dashboard bundle missing index.html (run \`make build-serve\`)` when the bundle is absent). The **real** dashboard ships only when `make build-serve` (`Makefile:23-29`) copies `dashboard/dist/*` into `cmd/cryptamap/webdist` *before* `go build` — that target (and `make release`) is what produces a binary whose `serve` shows the real UI.
+> **The committed `webdist/` is a PLACEHOLDER, not the real SPA.** Per the comment at `web_embed.go:8-13`, the file checked into `cmd/cryptamap/webdist` is a stub `index.html` only — the real Vite output lives in `dashboard/dist`, which is outside `cmd/cryptamap`, so `go:embed` cannot reach it. A plain `make build-cli` / `go build` therefore embeds only the placeholder, and `cryptamap serve` from that binary renders a stub shell (and `serve.go:183` even errors `dashboard bundle missing index.html (run \`make build-serve\`)` when the bundle is absent). The **real** dashboard ships only when `make build-serve` (`Makefile:23-37`) copies `dashboard/dist/*` into `cmd/cryptamap/webdist` *before* `go build` — that target (and `make release`) is what produces a binary whose `serve` shows the real UI.
 
 | Layer | Technology | Version | Why chosen |
 |---|---|---|---|
@@ -147,7 +147,7 @@ The dashboard is a separate TypeScript project under `dashboard/`. Its built bun
 | Design system | **Cloudscape** | components `^3.0.1306`, collection-hooks `^1.0.97`, global-styles `^1.0.59` | AWS's open-source console design system — gives the dashboard a familiar AWS look without bespoke UI code. `dashboard/package.json:13-15`. |
 | Routing | **react-router-dom** | `^6.28.0` | BrowserRouter deep-linking; `serve` falls back to `index.html` for client routes (`cmd/cryptamap/serve.go:147-175`). `dashboard/package.json:19`. |
 | Client-side PDF | **html2pdf.js** | `^0.14.0` | In-browser report export from the dashboard. `dashboard/package.json:16`. Bumped from `^0.10.2` (resolving jspdf 3.0.4) to `^0.14.0` (jspdf 4.2.x + dompurify) to clear the 2026-06 AppSec/grype jspdf+html2pdf advisories. |
-| Lint | **eslint** | (via `npm run lint`) | `dashboard/package.json:10`; non-blocking in `make lint` (`Makefile:80`). |
+| Lint | **eslint** | (via `npm run lint`) | `dashboard/package.json:10`; non-blocking in `make lint` (`Makefile:102`). |
 
 > **Generated types are the contract:** `dashboard/src/types/generated.ts` is produced by `go run ./cmd/gen-ts` from the Go wire structs and enums (`cmd/gen-ts/main.go:35,141-170`). The dashboard imports these; CI fails if they drift (`.github/workflows/ci.yml:60-64`). See [3.7](#37-maintainer--codegen-tools).
 
@@ -157,8 +157,8 @@ The deployed infrastructure is an **AWS CDK v2 app in TypeScript** under `cdk/`,
 
 | Layer | Technology | Version | Why chosen |
 |---|---|---|---|
-| IaC framework | **aws-cdk-lib** | `^2.180.0` | Single CDK v2 monolithic library for all constructs. `cdk/package.json:21`. |
-| CDK CLI (toolkit) | **aws-cdk** | `^2.180.0` | `cdk synth` / `deploy` / `diff` (`cdk/package.json:15`; Makefile targets `synth`/`deploy`/`destroy`, `Makefile:66-73`). |
+| IaC framework | **aws-cdk-lib** | `^2.260.0` | Single CDK v2 monolithic library for all constructs. `cdk/package.json:21`. |
+| CDK CLI (toolkit) | **aws-cdk** | `^2.1128.1` | `cdk synth` / `deploy` / `diff` (`cdk/package.json:15`; Makefile targets `synth`/`deploy`/`destroy`, `Makefile:80-92`). |
 | Constructs base | **constructs** | `^10.4.0` | CDK construct programming model. `cdk/package.json:22`. |
 | CDK language | **TypeScript** + **ts-node** | TS `^5.6.0`, ts-node `^10.9.2` | App authored in TS, executed via ts-node (`--prefer-ts-exts`) at synth (`cdk/cdk.json:2`, `cdk/package.json:16-18`). |
 | Lambda packaging target | `lambda.Runtime.PROVIDED_AL2023`, `Architecture.ARM_64` | n/a | The scanner Lambda runs the Go `bootstrap` binary cross-compiled to `linux/arm64` (`cdk/lib/scanner-stack.ts:40-44`; built by `Makefile:13-15` `build-lambda`, 1024 MB / 15 min). |
@@ -202,7 +202,7 @@ Synth-time context defaults (placeholder org id `o-exampleorgid`, root `r-exam`,
 
 The repo root is the Go module root, with `dashboard/` and `cdk/` as sibling Node projects. The `Makefile` is the developer entry point; `.github/workflows/ci.yml` mirrors it in three independent jobs.
 
-**Makefile targets** (`Makefile:1-83`):
+**Makefile targets** (`Makefile:1-106`):
 
 | Target | What it does | Cite |
 |---|---|---|
@@ -211,12 +211,12 @@ The repo root is the Go module root, with `dashboard/` and `cdk/` as sibling Nod
 | `build-lambda` | `GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -tags lambda -ldflags="-s -w"` → `bootstrap` | `Makefile:13-15` |
 | `build-cdk` | `cd cdk && npm run build && npx cdk synth` | `Makefile:17-18` |
 | `build-dashboard` | `cd dashboard && npm run build` | `Makefile:20-21` |
-| `build-serve` | builds dashboard, copies into `cmd/cryptamap/webdist`, rebuilds CLI with SPA embedded | `Makefile:23-29` |
-| `release` | cross-compiles air-gap binaries via `scripts/release-build.sh` | `Makefile:31-32` |
-| `generate-types` / `check-types` | `gen-ts` codegen + staleness diff guard | `Makefile:40-45` |
-| `generate-knowledge` / `check-knowledge` | `gen-knowledge` codegen + `-check` staleness guard | `Makefile:34-38` |
-| `test` / `vet` / `lint` | `go test … -cover`, `go vet`, dashboard eslint | `Makefile:47-54,78-80` |
-| `mock` / `scan` / `synth` / `deploy` / `destroy` | end-to-end exercises and CDK lifecycle | `Makefile:56-73` |
+| `build-serve` | builds dashboard, copies into `cmd/cryptamap/webdist`, rebuilds CLI with SPA embedded | `Makefile:23-37` |
+| `release` | cross-compiles air-gap binaries via `scripts/release-build.sh` | `Makefile:39-40` |
+| `generate-types` / `check-types` | `gen-ts` codegen + staleness diff guard | `Makefile:54-59` |
+| `generate-knowledge` / `check-knowledge` | `gen-knowledge` codegen + `-check` staleness guard | `Makefile:42-46` |
+| `test` / `vet` / `lint` | `go test … -cover`, `go vet`, dashboard eslint | `Makefile:61-62,67-68,100-102` |
+| `mock` / `scan` / `synth` / `deploy` / `destroy` | end-to-end exercises and CDK lifecycle | `Makefile:70-92` |
 
 **CI jobs** (`.github/workflows/ci.yml`) — three independent jobs so each toolchain fails on its own:
 
@@ -237,7 +237,7 @@ flowchart LR
 | CI guard | Why it exists | Cite |
 |---|---|---|
 | `go build ./...` runs **without** `cdk/node_modules` | CDK vendors a `%name%.template.go` init-template file that is not valid Go and would break `go build ./...` | `ci.yml:13-18,44-48` |
-| Go version comes from `go.mod` | `actions/setup-go` `go-version-file: go.mod` keeps CI on the pinned toolchain (`go 1.26.2`) | `ci.yml:40-41` |
+| Go version comes from `go.mod` | `actions/setup-go` `go-version-file: go.mod` + `check-latest: true` builds CI on the latest patch of the declared minor (`go 1.26`) | `ci.yml` (Go job, "Set up Go") |
 | **gen-ts drift guard** | Regenerate TS types and `git diff --exit-code` — Go model changes can never silently drift from the dashboard | `ci.yml:60-64` |
 | **gen-knowledge staleness guard** | `go run ./cmd/gen-knowledge -check` fails if the embedded PQC JSON diverges from the Go literals | `ci.yml:70-71` |
 | **lambda build** | `go build -tags lambda` covers the build-tagged org handler the default build skips | `ci.yml:76-77` |

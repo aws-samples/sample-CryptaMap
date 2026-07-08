@@ -19,7 +19,6 @@ import (
 	"github.com/aws-samples/cryptamap/internal/merge"
 	"github.com/aws-samples/cryptamap/internal/org"
 	"github.com/aws-samples/cryptamap/internal/output"
-	"github.com/aws-samples/cryptamap/internal/risk"
 	"github.com/aws-samples/cryptamap/internal/scanner"
 	"github.com/aws-samples/cryptamap/pkg/models"
 )
@@ -76,13 +75,18 @@ Indian BFSI regulators (SEBI / RBI / IRDAI) are first-class customers; the
 default Mosca's-Theorem parameters are calibrated for X=7y/Y=2y/Z=3y.`, registeredScannerCount()),
 		Version: toolVersion,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runScan(cmd.Context(), f)
+			// Pass cobra's per-flag "was it set on the command line?" predicate so
+			// runScan only overrides YAML config for flags the user ACTUALLY set —
+			// a flag left at its default must not clobber a config-file value (e.g.
+			// --mock-scale's default 5 silently overwriting a YAML
+			// mock.scale.resources_per_service: 20).
+			return runScan(cmd.Context(), f, cmd.Flags().Changed)
 		},
 	}
 	cmd.Flags().StringVarP(&f.configPath, "config", "c", "", "path to YAML config file")
 	cmd.Flags().StringSliceVarP(&f.regions, "regions", "r", nil, "regions to scan (comma-separated); pass 'all' to scan every enabled region in the caller account")
 	cmd.Flags().StringSliceVarP(&f.accounts, "accounts", "a", nil, "specific account IDs (org mode only)")
-	cmd.Flags().BoolVar(&f.org, "org", false, "enable AWS Organizations cross-account scanning")
+	cmd.Flags().BoolVar(&f.org, "org", false, "NOT honored by the CLI scan path (warns and scans only the caller account); org-wide scanning is the deployed Step Functions fan-out")
 	cmd.Flags().BoolVar(&f.mock, "mock", false, "synthesize mock data instead of calling AWS APIs")
 	cmd.Flags().IntVar(&f.mockScale, "mock-scale", 5, "resources per service in mock mode")
 	cmd.Flags().StringVarP(&f.outputDir, "output-dir", "o", "./dist/scan-output", "local output directory")
@@ -99,23 +103,44 @@ default Mosca's-Theorem parameters are calibrated for X=7y/Y=2y/Z=3y.`, register
 	return cmd
 }
 
-func runScan(ctx context.Context, f cliFlags) error {
+// runScan loads config, applies the CLI overrides the user explicitly set, and
+// runs the scan. changed(flagName) reports whether a flag was set on the command
+// line (cobra's Flags().Changed), so a flag left at its default never overrides a
+// value from the YAML config file. changed may be nil (e.g. in a test that builds
+// cliFlags directly); a nil predicate is treated as "no flag was explicitly set",
+// so only the slice/string fields that are non-empty in f still apply.
+func runScan(ctx context.Context, f cliFlags, changed func(string) bool) error {
 	cfg, err := cmconfig.Load(f.configPath)
 	if err != nil {
 		return err
 	}
-	cfg.Apply(cmconfig.CLIOverrides{
-		Regions:     f.regions,
-		Accounts:    f.accounts,
-		OrgScanning: ptrBool(f.org),
-		Mock:        ptrBool(f.mock),
-		MockScale:   ptrInt(f.mockScale),
-		OutputDir:   f.outputDir,
-		Profile:     f.profile,
-		Verbose:     ptrBool(f.verbose),
-	})
+	if changed == nil {
+		changed = func(string) bool { return false }
+	}
+	ov := cmconfig.CLIOverrides{
+		// Regions/Accounts are slices with no meaningful default, so a non-empty
+		// value already means "user supplied it" — Apply gates on len()>0.
+		Regions:  f.regions,
+		Accounts: f.accounts,
+		Profile:  f.profile,
+	}
+	// Value flags with non-zero defaults (mock, mock-scale, output-dir, verbose)
+	// only override config when the user actually passed them.
+	if changed("mock") {
+		ov.Mock = ptrBool(f.mock)
+	}
+	if changed("mock-scale") {
+		ov.MockScale = ptrInt(f.mockScale)
+	}
+	if changed("output-dir") {
+		ov.OutputDir = f.outputDir
+	}
+	if changed("verbose") {
+		ov.Verbose = ptrBool(f.verbose)
+	}
+	cfg.Apply(ov)
 
-	if err := os.MkdirAll(cfg.Output.LocalDir, 0o755); err != nil {
+	if err := os.MkdirAll(cfg.Output.LocalDir, 0o700); err != nil {
 		return err
 	}
 
@@ -127,6 +152,10 @@ func runScan(ctx context.Context, f cliFlags) error {
 		MaxRetries:    cfg.Scan.RateLimiting.MaxRetries,
 		Verbose:       f.verbose,
 		ToolVersion:   toolVersion,
+		// Wire the operator's YAML risk.mosca.overrides into the engine so
+		// per-service Mosca (X+Y-Z) parameters actually take effect in
+		// BuildFindings (previously cfg.Risk was loaded but never consumed).
+		MoscaOverrides: cfg.MoscaOverrideParams(),
 	}
 
 	if cfg.Mock.Enabled {
@@ -255,7 +284,7 @@ func writeArtifacts(scan models.ScanResult, cfg *cmconfig.Config, verbose bool) 
 	// CycloneDX CBOM
 	if cfg.Output.Formats.CycloneDX {
 		path := filepath.Join(dir, prefix+".cbom.json")
-		fb, err := os.Create(path)
+		fb, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
 		if err != nil {
 			return err
 		}
@@ -263,7 +292,9 @@ func writeArtifacts(scan models.ScanResult, cfg *cmconfig.Config, verbose bool) 
 			fb.Close()
 			return err
 		}
-		fb.Close()
+		if err := fb.Close(); err != nil {
+			return err
+		}
 		if verbose {
 			fmt.Fprintf(os.Stderr, "[cryptamap]   wrote %s\n", path)
 		}
@@ -272,7 +303,7 @@ func writeArtifacts(scan models.ScanResult, cfg *cmconfig.Config, verbose bool) 
 	// PQCC Excel
 	if cfg.Output.Formats.PQCCExcel {
 		path := filepath.Join(dir, prefix+".pqcc.xlsx")
-		fb, err := os.Create(path)
+		fb, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
 		if err != nil {
 			return err
 		}
@@ -287,7 +318,9 @@ func writeArtifacts(scan models.ScanResult, cfg *cmconfig.Config, verbose bool) 
 			fb.Close()
 			return err
 		}
-		fb.Close()
+		if err := fb.Close(); err != nil {
+			return err
+		}
 		if verbose {
 			fmt.Fprintf(os.Stderr, "[cryptamap]   wrote %s\n", path)
 		}
@@ -296,7 +329,7 @@ func writeArtifacts(scan models.ScanResult, cfg *cmconfig.Config, verbose bool) 
 	// Self-contained offline HTML evidence report (single file, opens file://).
 	if cfg.Output.Formats.HTML {
 		path := filepath.Join(dir, prefix+".report.html")
-		fb, err := os.Create(path)
+		fb, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
 		if err != nil {
 			return err
 		}
@@ -304,7 +337,9 @@ func writeArtifacts(scan models.ScanResult, cfg *cmconfig.Config, verbose bool) 
 			fb.Close()
 			return err
 		}
-		fb.Close()
+		if err := fb.Close(); err != nil {
+			return err
+		}
 		if verbose {
 			fmt.Fprintf(os.Stderr, "[cryptamap]   wrote %s\n", path)
 		}
@@ -313,7 +348,7 @@ func writeArtifacts(scan models.ScanResult, cfg *cmconfig.Config, verbose bool) 
 	// ASFF JSON
 	if cfg.Output.Formats.ASFF {
 		path := filepath.Join(dir, prefix+".asff.json")
-		fb, err := os.Create(path)
+		fb, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
 		if err != nil {
 			return err
 		}
@@ -322,21 +357,36 @@ func writeArtifacts(scan models.ScanResult, cfg *cmconfig.Config, verbose bool) 
 			fb.Close()
 			return err
 		}
-		fb.Close()
+		if err := fb.Close(); err != nil {
+			return err
+		}
 	}
 
-	// Raw scan result (debug/local)
+	// Raw scan result (debug/local). Propagate write failures — this file is the
+	// verbatim evidence record, so a silent miss would look like a complete run.
 	rawPath := filepath.Join(dir, prefix+".scan.json")
-	if rb, err := json.MarshalIndent(scan, "", "  "); err == nil {
-		_ = os.WriteFile(rawPath, rb, 0o644)
+	rb, err := json.MarshalIndent(scan, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshal raw scan result: %w", err)
+	}
+	if err := os.WriteFile(rawPath, rb, 0o600); err != nil {
+		return err
 	}
 
-	// PDF/markdown summary
+	// PDF/markdown summary. Propagate create/write/close errors so a truncated
+	// report.md never passes as complete with a zero exit code.
 	if cfg.Output.Formats.PDF {
 		path := filepath.Join(dir, prefix+".report.md")
-		if fb, err := os.Create(path); err == nil {
-			_ = output.WritePDFSummary(fb, scan)
+		fb, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
+		if err != nil {
+			return err
+		}
+		if err := output.WritePDFSummary(fb, scan); err != nil {
 			fb.Close()
+			return err
+		}
+		if err := fb.Close(); err != nil {
+			return err
 		}
 	}
 
@@ -354,12 +404,12 @@ func writeArtifacts(scan models.ScanResult, cfg *cmconfig.Config, verbose bool) 
 // single ScanResult (a per-region scan or the merged org-wide result).
 func writeRoadmap(dir, prefix string, scan models.ScanResult, verbose bool) error {
 	jsonPath := filepath.Join(dir, prefix+".roadmap.json")
-	jf, err := os.Create(jsonPath)
+	jf, err := os.OpenFile(jsonPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
 	if err != nil {
 		return err
 	}
 	mdPath := filepath.Join(dir, prefix+".roadmap.md")
-	mf, err := os.Create(mdPath)
+	mf, err := os.OpenFile(mdPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
 	if err != nil {
 		jf.Close()
 		return err
@@ -370,8 +420,13 @@ func writeRoadmap(dir, prefix string, scan models.ScanResult, verbose bool) erro
 		mf.Close()
 		return err
 	}
-	jf.Close()
-	mf.Close()
+	if err := jf.Close(); err != nil {
+		mf.Close()
+		return err
+	}
+	if err := mf.Close(); err != nil {
+		return err
+	}
 	if verbose {
 		fmt.Fprintf(os.Stderr, "[cryptamap]   wrote %s + %s\n", jsonPath, mdPath)
 	}
@@ -389,18 +444,25 @@ func writeOrgMerge(results []models.ScanResult, orchestratorAccountID string, cf
 	dir := cfg.Output.LocalDir
 	prefix := fmt.Sprintf("cryptamap-org-%s", res.Merged.CompletedAt.Format("20060102T150405Z"))
 
-	// Merged org-wide CBOM.
+	// Merged org-wide CBOM. os.OpenFile failures MUST propagate (mirroring
+	// writeArtifacts): the merged CBOM is the primary org-wide deliverable, so
+	// skipping it silently and still printing the success line below would be a
+	// fabricated "org-merge succeeded" verdict.
 	if cfg.Output.Formats.CycloneDX {
 		path := filepath.Join(dir, prefix+".cbom.json")
-		if fb, err := os.Create(path); err == nil {
-			if err := output.WriteCBOM(fb, res.Merged); err != nil {
-				fb.Close()
-				return err
-			}
+		fb, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
+		if err != nil {
+			return err
+		}
+		if err := output.WriteCBOM(fb, res.Merged); err != nil {
 			fb.Close()
-			if verbose {
-				fmt.Fprintf(os.Stderr, "[cryptamap]   wrote %s\n", path)
-			}
+			return err
+		}
+		if err := fb.Close(); err != nil {
+			return err
+		}
+		if verbose {
+			fmt.Fprintf(os.Stderr, "[cryptamap]   wrote %s\n", path)
 		}
 	}
 
@@ -412,9 +474,15 @@ func writeOrgMerge(results []models.ScanResult, orchestratorAccountID string, cf
 	}
 
 	// Coverage matrix (which account/region was scanned, and whether it errored).
+	// Its stated purpose is "so no account is silently treated as clean" — so its
+	// own write failure must not be silent either.
 	covPath := filepath.Join(dir, prefix+".coverage.json")
-	if cb, err := json.MarshalIndent(res.Coverage, "", "  "); err == nil {
-		_ = os.WriteFile(covPath, cb, 0o644)
+	cb, err := json.MarshalIndent(res.Coverage, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshal coverage matrix: %w", err)
+	}
+	if err := os.WriteFile(covPath, cb, 0o600); err != nil {
+		return err
 	}
 
 	fmt.Fprintf(os.Stderr, "[cryptamap] org-merge: %d regions → %d deduped assets, %d findings (coverage: %d shards)\n",
@@ -457,9 +525,6 @@ func loadAWSConfig(ctx context.Context, profile string) (aws.Config, error) {
 func mockAccountID() string {
 	return fmt.Sprintf("%012d", time.Now().Unix()%1_000_000_000_000)
 }
-
-// Suppress unused-warning for the risk package import.
-var _ = risk.DefaultParams
 
 // isAllRegionsToken reports whether the operator passed the literal `--regions all`
 // sentinel (the single token "all", case-insensitive) requesting every enabled

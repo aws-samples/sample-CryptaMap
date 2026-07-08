@@ -272,3 +272,75 @@ func httpGet(t *testing.T, url string) string {
 	}
 	return string(body)
 }
+
+// TestScanTimestampFromName verifies the stale-scan guard reads the scan
+// timestamp embedded in the FILENAME (authoritative — survives S3 download /
+// scp / checkout, which all reset mtime) and returns the zero time for
+// unparseable names so the caller can fall back to mtime.
+func TestScanTimestampFromName(t *testing.T) {
+	ts := scanTimestampFromName("/some/dir/cryptamap-scan-111122223333-us-east-1-20260101T000000Z.cbom.json")
+	if ts.IsZero() || ts.Year() != 2026 || ts.Month() != 1 || ts.Day() != 1 {
+		t.Errorf("per-scan filename timestamp = %v, want 2026-01-01", ts)
+	}
+	ts = scanTimestampFromName("cryptamap-org-20250615T120000Z.cbom.json")
+	if ts.IsZero() || ts.Year() != 2025 || ts.Month() != 6 {
+		t.Errorf("org filename timestamp = %v, want 2025-06-15", ts)
+	}
+	// No timestamp token → zero time (caller falls back to mtime).
+	if ts := scanTimestampFromName("org-cbom.json"); !ts.IsZero() {
+		t.Errorf("canonical name should yield zero time, got %v", ts)
+	}
+}
+
+// TestDemoMuxManifestJSON verifies --demo serves an honest empty JSON manifest
+// at /artifacts/manifest.json instead of falling into the SPA fallback and
+// returning 200 text/html index.html (a JSON parse error masked by a success).
+func TestDemoMuxManifestJSON(t *testing.T) {
+	srv := httptest.NewServer(newDemoMux())
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/artifacts/manifest.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("demo manifest status = %d, want 200", resp.StatusCode)
+	}
+	if ct := resp.Header.Get("Content-Type"); !strings.Contains(ct, "application/json") {
+		t.Errorf("demo manifest Content-Type = %q, want application/json (not the HTML SPA fallback)", ct)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	if got := strings.TrimSpace(string(body)); got != "[]" {
+		t.Errorf("demo manifest body = %q, want empty JSON array", got)
+	}
+}
+
+// TestLoopbackHostGuardSecurityHeaders verifies every allowed response carries
+// the baseline security headers: the served data is an org crypto inventory, so
+// it must never persist in a browser cache (no-store) nor be MIME-sniffed.
+func TestLoopbackHostGuardSecurityHeaders(t *testing.T) {
+	guard := loopbackHostGuard(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}), 8675)
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Host = "127.0.0.1:8675"
+	rec := httptest.NewRecorder()
+	guard.ServeHTTP(rec, req)
+	if got := rec.Header().Get("Cache-Control"); got != "no-store" {
+		t.Errorf("Cache-Control = %q, want no-store", got)
+	}
+	if got := rec.Header().Get("X-Content-Type-Options"); got != "nosniff" {
+		t.Errorf("X-Content-Type-Options = %q, want nosniff", got)
+	}
+	if got := rec.Header().Get("X-Frame-Options"); got != "DENY" {
+		t.Errorf("X-Frame-Options = %q, want DENY", got)
+	}
+	if got := rec.Header().Get("Referrer-Policy"); got != "no-referrer" {
+		t.Errorf("Referrer-Policy = %q, want no-referrer", got)
+	}
+	const wantCSP = "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; object-src 'none'; base-uri 'none'"
+	if got := rec.Header().Get("Content-Security-Policy"); got != wantCSP {
+		t.Errorf("Content-Security-Policy = %q, want %q", got, wantCSP)
+	}
+}

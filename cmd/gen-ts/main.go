@@ -145,6 +145,7 @@ func main() {
 		{Name: "Finding", Doc: "pkg/models/finding.go Finding.", rt: reflect.TypeOf(models.Finding{})},
 		{Name: "ScanSummary", Doc: "pkg/models/scan.go ScanSummary.", rt: reflect.TypeOf(models.ScanSummary{})},
 		{Name: "ServiceScanReport", Doc: "pkg/models/scan.go ServiceScanReport.", rt: reflect.TypeOf(models.ServiceScanReport{})},
+		{Name: "MergeCoverage", Doc: "pkg/models/scan.go MergeCoverage.", rt: reflect.TypeOf(models.MergeCoverage{})},
 		{Name: "ScanResult", Doc: "pkg/models/scan.go ScanResult.", rt: reflect.TypeOf(models.ScanResult{})},
 		{Name: "MultiScanResult", Doc: "pkg/models/scan.go MultiScanResult.", rt: reflect.TypeOf(models.MultiScanResult{})},
 		// pkg/models — CBOM cryptoProperties surface

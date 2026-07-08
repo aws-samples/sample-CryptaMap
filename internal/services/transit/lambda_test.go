@@ -12,14 +12,18 @@ import (
 )
 
 // fakeLambdaListClient is a hand-rolled lambdaListAPI for unit-testing the
-// scanner's pagination + error propagation without a live AWS client.
-// functionsPages is returned page-by-page (each call consumes the next page) and
-// the NextMarker is wired so the scanner loops through every page; listErr forces
-// a ListFunctions failure.
+// scanner's pagination + error propagation + Function-URL resolution without a
+// live AWS client. functionsPages is returned page-by-page (each call consumes
+// the next page) and the NextMarker is wired so the scanner loops through every
+// page; listErr forces a ListFunctions failure. urlsByFunction maps a function
+// name to its Function URL configs (absent -> no URL); urlErr forces every
+// ListFunctionUrlConfigs call to fail.
 type fakeLambdaListClient struct {
 	functionsPages []*lambda.ListFunctionsOutput
 	lambdaCalls    int
 	listErr        error
+	urlsByFunction map[string][]lambdatypes.FunctionUrlConfig
+	urlErr         error
 }
 
 func (f *fakeLambdaListClient) ListFunctions(ctx context.Context, in *lambda.ListFunctionsInput, optFns ...func(*lambda.Options)) (*lambda.ListFunctionsOutput, error) {
@@ -32,6 +36,17 @@ func (f *fakeLambdaListClient) ListFunctions(ctx context.Context, in *lambda.Lis
 	out := f.functionsPages[f.lambdaCalls]
 	f.lambdaCalls++
 	return out, nil
+}
+
+func (f *fakeLambdaListClient) ListFunctionUrlConfigs(ctx context.Context, in *lambda.ListFunctionUrlConfigsInput, optFns ...func(*lambda.Options)) (*lambda.ListFunctionUrlConfigsOutput, error) {
+	if f.urlErr != nil {
+		return nil, f.urlErr
+	}
+	name := ""
+	if in.FunctionName != nil {
+		name = *in.FunctionName
+	}
+	return &lambda.ListFunctionUrlConfigsOutput{FunctionUrlConfigs: f.urlsByFunction[name]}, nil
 }
 
 func lambdaStrptr(s string) *string { return &s }
@@ -103,38 +118,95 @@ func TestLambdaScanListErrorPropagates(t *testing.T) {
 	}
 }
 
-// TestLambdaScanHonestyPosture verifies the scanner's domain honesty: a Lambda
-// function (always TLS-fronted by AWS, never plaintext) must be classified as
-// NonPQCClassical — never a clean/quantum-resistant all-clear — and must NOT assert a
-// concrete served TLS version, because the Function-URL data-plane minimum is
-// undocumented (left UNKNOWN with low-confidence aws-doc provenance), not the
-// control-plane "1.2".
+// TestLambdaScanHonestyPosture verifies the scanner's domain honesty: a
+// definite classical-TLS transit posture is emitted ONLY for a function whose
+// Function URL (the one provable HTTPS-only served endpoint) is confirmed via
+// ListFunctionUrlConfigs. A plain function with NO Function URL serves no
+// endpoint of its own and no API exposes its invoke-path TLS configuration, so
+// it must be PostureUnknown with a note — never a fabricated NonPQCClassical.
+// Neither case may assert a concrete served TLS version, because the
+// Function-URL data-plane minimum is undocumented.
 func TestLambdaScanHonestyPosture(t *testing.T) {
 	client := &fakeLambdaListClient{
 		functionsPages: []*lambda.ListFunctionsOutput{
-			{Functions: []lambdatypes.FunctionConfiguration{{FunctionName: lambdaStrptr("fn-honest")}}},
+			{Functions: []lambdatypes.FunctionConfiguration{
+				{FunctionName: lambdaStrptr("fn-with-url")},
+				{FunctionName: lambdaStrptr("fn-plain")},
+			}},
+		},
+		urlsByFunction: map[string][]lambdatypes.FunctionUrlConfig{
+			"fn-with-url": {{FunctionUrl: lambdaStrptr("https://abc123.lambda-url.us-east-1.on.aws/")}},
 		},
 	}
 	assets, err := LambdaScanner{}.scan(context.Background(), client, "111122223333", "us-east-1")
 	if err != nil {
 		t.Fatalf("scan returned unexpected error: %v", err)
 	}
-	a, ok := lambdaAssetByID(assets, "fn-honest")
+
+	withURL, ok := lambdaAssetByID(assets, "fn-with-url")
 	if !ok {
-		t.Fatalf("expected an asset for fn-honest, got assets=%v", assets)
+		t.Fatalf("expected an asset for fn-with-url, got assets=%v", assets)
 	}
-	if got := a.Properties["posture"]; got != string(models.PostureNonPQCClassical) {
-		t.Errorf("expected posture %q (TLS-fronted classical, NOT a clean all-clear), got %q",
+	if got := withURL.Properties["posture"]; got != string(models.PostureNonPQCClassical) {
+		t.Errorf("function WITH a Function URL: expected posture %q (HTTPS-only served endpoint proven), got %q",
 			models.PostureNonPQCClassical, got)
 	}
-	if a.CryptoProps.ProtocolProperties == nil {
+	if withURL.Properties["functionUrl"] != "true" {
+		t.Errorf("expected functionUrl=true recorded for fn-with-url, got %q", withURL.Properties["functionUrl"])
+	}
+	if withURL.CryptoProps.ProtocolProperties == nil {
 		t.Fatalf("expected protocol properties to be populated for a transit asset")
 	}
-	if v := a.CryptoProps.ProtocolProperties.Version; v != "" {
+	if v := withURL.CryptoProps.ProtocolProperties.Version; v != "" {
 		t.Errorf("expected served TLS version to be UNKNOWN (empty) for an undocumented Function-URL data plane, got %q", v)
 	}
-	if a.ResourceType != "AWS::Lambda::Function" {
-		t.Errorf("expected resourceType AWS::Lambda::Function, got %q", a.ResourceType)
+	if withURL.ResourceType != "AWS::Lambda::Function" {
+		t.Errorf("expected resourceType AWS::Lambda::Function, got %q", withURL.ResourceType)
+	}
+
+	plain, ok := lambdaAssetByID(assets, "fn-plain")
+	if !ok {
+		t.Fatalf("expected an asset for fn-plain, got assets=%v", assets)
+	}
+	if got := plain.Properties["posture"]; got != string(models.PostureUnknown) {
+		t.Errorf("function WITHOUT a Function URL: expected posture %q (no provable served TLS endpoint — never a fabricated classical verdict), got %q",
+			models.PostureUnknown, got)
+	}
+	if plain.Properties["functionUrl"] != "false" {
+		t.Errorf("expected functionUrl=false recorded for fn-plain, got %q", plain.Properties["functionUrl"])
+	}
+	if note := plain.Properties["note"]; note == "" {
+		t.Error("function WITHOUT a Function URL: expected a note naming what could not be proven, got none")
+	}
+	if v := plain.CryptoProps.ProtocolProperties.Version; v != "" {
+		t.Errorf("expected served TLS version to be UNKNOWN (empty), got %q", v)
+	}
+}
+
+// TestLambdaScanURLConfigErrorYieldsUnknown verifies the honesty fallback for a
+// denied/throttled ListFunctionUrlConfigs: whether the function serves an HTTPS
+// endpoint is unproven, so the posture must be Unknown + note — never a
+// fabricated definite classical posture off an unreadable config.
+func TestLambdaScanURLConfigErrorYieldsUnknown(t *testing.T) {
+	client := &fakeLambdaListClient{
+		functionsPages: []*lambda.ListFunctionsOutput{
+			{Functions: []lambdatypes.FunctionConfiguration{{FunctionName: lambdaStrptr("fn-denied")}}},
+		},
+		urlErr: errors.New("AccessDeniedException: not authorized to perform lambda:ListFunctionUrlConfigs"),
+	}
+	assets, err := LambdaScanner{}.scan(context.Background(), client, "111122223333", "us-east-1")
+	if err != nil {
+		t.Fatalf("scan returned unexpected error (per-function URL read failures must not abort the scan): %v", err)
+	}
+	a, ok := lambdaAssetByID(assets, "fn-denied")
+	if !ok {
+		t.Fatalf("expected an asset for fn-denied, got assets=%v", assets)
+	}
+	if got := a.Properties["posture"]; got != string(models.PostureUnknown) {
+		t.Errorf("unreadable Function URL config: expected posture %q, got %q", models.PostureUnknown, got)
+	}
+	if note := a.Properties["note"]; note == "" {
+		t.Error("unreadable Function URL config: expected a note naming what could not be read, got none")
 	}
 }
 

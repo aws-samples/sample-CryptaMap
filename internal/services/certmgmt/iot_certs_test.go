@@ -266,6 +266,12 @@ func TestIoTCertsScanPostureHonesty(t *testing.T) {
 		if got := iotCertsPostureOf(a); got == models.PostureNoEncryption {
 			t.Errorf("a certificate must NEVER be classified NoEncryption; a cert always carries a signing key")
 		}
+		// Expiry honesty: the parsed leaf's real validity window must reach
+		// the CBOM — with a zero NotValidAfter an expired device cert is
+		// indistinguishable from a valid one.
+		if a.CryptoProps.CertificateProperties == nil || a.CryptoProps.CertificateProperties.NotValidAfter.IsZero() {
+			t.Errorf("classical cert %q: expected non-zero NotValidAfter from the parsed leaf", want)
+		}
 	}
 
 	mystery := iotCertsAssetByID(assets, "arn:cert-mystery")

@@ -289,3 +289,78 @@ func TestALBScanPostureHonesty(t *testing.T) {
 		t.Errorf("legacy TLS 1.0 listener has empty posture; a downgrade-capable policy must never read clean")
 	}
 }
+
+// TestALBScanPlaintextHTTPListener pins the plaintext-listener honesty fix: an
+// HTTP:80 listener (no SslPolicy) is a VERIFIED no-encryption finding — it must
+// be emitted as PostureNoEncryption with a note (mirroring the Classic ELB
+// plaintext handling), NOT run through the SSL-policy resolver and emitted as a
+// "tls"-typed PostureUnknown asset.
+func TestALBScanPlaintextHTTPListener(t *testing.T) {
+	client := &fakeALBClient{
+		lbPages: []*elbv2.DescribeLoadBalancersOutput{{LoadBalancers: []elbv2types.LoadBalancer{albAppLB("alb-plain")}}},
+		listeners: map[string]*elbv2.DescribeListenersOutput{
+			"arn:aws:elasticloadbalancing:us-east-1:111122223333:loadbalancer/app/alb-plain": {
+				Listeners: []elbv2types.Listener{
+					{Port: albI32(80), Protocol: elbv2types.ProtocolEnumHttp}, // plaintext, no SslPolicy
+					{Port: albI32(443), Protocol: elbv2types.ProtocolEnumHttps, SslPolicy: albStrptr("ELBSecurityPolicy-TLS13-1-2-2021-06")},
+				},
+			},
+		},
+		sslPolicies: map[string]elbv2types.SslPolicy{
+			"ELBSecurityPolicy-TLS13-1-2-2021-06": {
+				Name:         albStrptr("ELBSecurityPolicy-TLS13-1-2-2021-06"),
+				SslProtocols: []string{"TLSv1.2", "TLSv1.3"},
+				Ciphers:      []elbv2types.Cipher{{Name: albStrptr("ECDHE-RSA-AES256-GCM-SHA384"), Priority: albI32(1)}},
+			},
+		},
+	}
+	assets, err := ALBScanner{}.scan(context.Background(), client, nil, "111122223333", "us-east-1")
+	if err != nil {
+		t.Fatalf("scan returned unexpected error: %v", err)
+	}
+
+	http80, ok := albAssetByID(assets, "alb-plain-80")
+	if !ok {
+		t.Fatalf("expected plaintext HTTP listener asset alb-plain-80; assets=%v", assets)
+	}
+	if got := albPostureOf(http80); got != string(models.PostureNoEncryption) {
+		t.Errorf("plaintext HTTP listener: posture = %q, want %q (verified no-encryption, never a tls-typed Unknown)", got, models.PostureNoEncryption)
+	}
+	if http80.Properties["note"] == "" {
+		t.Errorf("plaintext HTTP listener: expected a note explaining the no-TLS finding, got empty")
+	}
+	if pp := http80.CryptoProps.ProtocolProperties; pp != nil && pp.Type == "tls" {
+		t.Errorf("plaintext HTTP listener must NOT carry a tls-typed protocol block")
+	}
+
+	// The HTTPS listener still classifies through the SSL-policy resolver.
+	https443, ok := albAssetByID(assets, "alb-plain-443")
+	if !ok {
+		t.Fatalf("expected HTTPS listener asset alb-plain-443")
+	}
+	if got := albPostureOf(https443); got != string(models.PostureNonPQCClassical) {
+		t.Errorf("HTTPS listener: posture = %q, want %q", got, models.PostureNonPQCClassical)
+	}
+}
+
+// TestPolicyVersionNeverFabricatesModernFloor pins the name-substring fallback
+// honesty fix: ELBSecurityPolicy-2016-08 enables TLSv1/1.1/1.2, so its NAME must
+// NOT map to a clean "1.2" classical — only DescribeSSLPolicies (real
+// SslProtocols) may classify it. Unrecognized names stay Unknown.
+func TestPolicyVersionNeverFabricatesModernFloor(t *testing.T) {
+	ver, posture := policyVersion("ELBSecurityPolicy-2016-08")
+	if ver != "" || posture != models.PostureUnknown {
+		t.Errorf("policyVersion(ELBSecurityPolicy-2016-08) = (%q, %q), want (\"\", unknown): the name proves no modern floor", ver, posture)
+	}
+	ver, posture = policyVersion("some-custom-policy")
+	if ver != "" || posture != models.PostureUnknown {
+		t.Errorf("policyVersion(custom) = (%q, %q), want (\"\", unknown)", ver, posture)
+	}
+	// Names that DO encode an explicit floor keep their honest mapping.
+	if ver, posture := policyVersion("ELBSecurityPolicy-TLS-1-2-2017-01"); ver != "1.2" || posture != models.PostureNonPQCClassical {
+		t.Errorf("policyVersion(TLS-1-2) = (%q, %q), want (1.2, non-pqc-classical)", ver, posture)
+	}
+	if ver, posture := policyVersion("ELBSecurityPolicy-TLS-1-0-2015-04"); ver != "1.0" || posture != models.PostureLegacyTLS {
+		t.Errorf("policyVersion(TLS-1-0) = (%q, %q), want (1.0, legacy-tls)", ver, posture)
+	}
+}

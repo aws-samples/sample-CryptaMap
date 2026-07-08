@@ -32,7 +32,7 @@ export function PostureLegendContent() {
         </Box>
         <StatusIndicator type="success">Symmetric only</StatusIndicator>
         <Box variant="small">
-          AES-256 / symmetric — already quantum-resistant, no key-exchange migration.
+          Symmetric encryption — already quantum-resistant, no key-exchange migration.
         </Box>
         <StatusIndicator type="success">PQC hybrid / PQC ready</StatusIndicator>
         <Box variant="small">
@@ -86,7 +86,7 @@ export function PqcStatusContent() {
         </Box>
         <StatusIndicator type="success">Quantum-resistant — no action</StatusIndicator>
         <Box variant="small">
-          The asset is <strong>already</strong> quantum-resistant (symmetric AES-256 or PQC
+          The asset is <strong>already</strong> quantum-resistant (symmetric encryption or PQC
           hybrid/ready). Nothing to do.
         </Box>
         <StatusIndicator type="warning">Not yet available</StatusIndicator>

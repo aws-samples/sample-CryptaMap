@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -27,7 +28,7 @@ import (
 func testRegistry() *Registry {
 	r := NewRegistry()
 
-	// certificate management (8)
+	// certificate management (10)
 	r.Register(certmgmt.ACMScanner{})
 	r.Register(certmgmt.ACMPCAScanner{})
 	r.Register(certmgmt.IAMCertsScanner{})
@@ -55,7 +56,7 @@ func testRegistry() *Registry {
 	r.Register(sdkpqc.ContainerImagesScanner{})
 	r.Register(sdkpqc.EC2SSMScanner{})
 
-	// data at rest (38)
+	// data at rest (49)
 	r.Register(datarest.S3Scanner{})
 	r.Register(datarest.EBSScanner{})
 	r.Register(datarest.RDSScanner{})
@@ -171,11 +172,20 @@ var errReadOnlyGuard = errors.New("read-only-guard: request short-circuited afte
 // name of every request the scanner attempts.
 func readOnlyGuardConfig(t *testing.T, seen *[]string) aws.Config {
 	t.Helper()
+	// The guarded config is handed to Engine.Run with multiple worker goroutines
+	// (MaxGoroutines: 8), so this middleware runs concurrently. The append to the
+	// shared *seen slice MUST be mutex-guarded: an unsynchronized append is a
+	// data race (`go test -race` failed here) and can silently LOSE recorded
+	// operation names — defeating the guard's promise that it sees the operation
+	// name of every request.
+	var mu sync.Mutex
 	guard := smithymw.FinalizeMiddlewareFunc(
 		"cryptamap-readonly-guard",
 		func(ctx context.Context, in smithymw.FinalizeInput, _ smithymw.FinalizeHandler) (smithymw.FinalizeOutput, smithymw.Metadata, error) {
 			op := smithymw.GetOperationName(ctx)
+			mu.Lock()
 			*seen = append(*seen, op)
+			mu.Unlock()
 			if !isReadOperation(op) {
 				t.Errorf("read-only violation: scanner issued non-read operation %q", op)
 			}
@@ -201,7 +211,7 @@ func readOnlyGuardConfig(t *testing.T, seen *[]string) aws.Config {
 //
 // COVERAGE SCOPE: this exercises one representative scanner path
 // (EC2KeyPairsScanner, which also triggers the shared services.AccountID STS
-// GetCallerIdentity call) rather than every scanner — running all 86 scanners
+// GetCallerIdentity call) rather than every scanner — running all 99 scanners
 // against a live middleware harness is far heavier and most are gated behind
 // pagination/list calls that the short-circuit truncates. The guard is generic:
 // pointed at any scanner it would catch a mutating call. The registry↔taxonomy

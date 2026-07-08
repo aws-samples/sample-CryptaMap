@@ -250,6 +250,7 @@ func TestTransitScanners_CBOMSchemaConformance(t *testing.T) {
 			clusterPages: []*docdb.DescribeDBClustersOutput{{
 				DBClusters: []docdbtypes.DBCluster{{
 					DBClusterIdentifier:     documentdbtransitStrptr("cluster-default"),
+					Engine:                  documentdbtransitStrptr("docdb"),
 					DBClusterParameterGroup: documentdbtransitStrptr("default.docdb5.0"),
 				}},
 			}},
@@ -261,7 +262,11 @@ func TestTransitScanners_CBOMSchemaConformance(t *testing.T) {
 	t.Run("neptune_transit", func(t *testing.T) {
 		client := &fakeNeptuneTransitClient{
 			clustersPages: []*neptune.DescribeDBClustersOutput{
-				{DBClusters: []neptunetypes.DBCluster{{DBClusterIdentifier: neptunetransitStrptr("neptune-secured")}}},
+				{DBClusters: []neptunetypes.DBCluster{{
+					DBClusterIdentifier: neptunetransitStrptr("neptune-secured"),
+					Engine:              neptunetransitStrptr("neptune"),
+					EngineVersion:       neptunetransitStrptr("1.2.0.1"),
+				}}},
 			},
 			instancesPages: []*neptune.DescribeDBInstancesOutput{
 				{

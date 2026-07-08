@@ -20,8 +20,11 @@ const propPrefix = "cryptamap:"
 // buildCBOM and reuses the same CDX* structs declared in cyclonedx.go.
 //
 // The returned ScanResults have Assets populated but Findings empty; callers
-// regenerate findings deterministically via scanner.BuildFindings. Mode is set
-// to "live" so the merge package's source-precedence matches a real live scan.
+// regenerate findings deterministically via scanner.BuildFindings. An ingested
+// file is UNTRUSTED input: its assets are re-classified from scratch and it is
+// NOT treated as a live scan (see ParseCBOM for the mode/source-precedence and
+// property-allowlist handling that prevents a tampered file from suppressing or
+// outranking a genuine live scan).
 func ParseCBOMFile(path string) ([]models.ScanResult, error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
@@ -48,9 +51,16 @@ func ParseCBOM(raw []byte) ([]models.ScanResult, error) {
 	if v := meta["scanId"]; v != "" {
 		metaScanID = v
 	}
+	// An ingested CBOM file is UNTRUSTED input, not a live scan. Defaulting its
+	// mode to "live" (the prior behavior) gave a hand-edited file the same
+	// source-precedence as a genuine scan in the merge package (merge.sourceOf
+	// reads Properties["source"]), so a crafted shard could OUTRANK real results.
+	// Force an explicit non-live mode for anything reconstructed from a file so
+	// merge precedence can never favor file input over a live scan. A file that
+	// self-declares mode="live" is not honored.
 	metaMode := meta["mode"]
-	if metaMode == "" {
-		metaMode = "live"
+	if metaMode == "" || metaMode == "live" {
+		metaMode = "ingested"
 	}
 
 	// Group assets by (accountId, region) so each tuple becomes one shard, which
@@ -96,8 +106,8 @@ func ParseCBOM(raw []byte) ([]models.ScanResult, error) {
 
 // componentToAsset reconstructs one models.CryptoAsset from a CDXComponent. It
 // maps the cryptamap:* properties back onto the asset fields, rebuilds the
-// free-form Properties map (with the cryptamap: prefix stripped, so
-// Properties["posture"] is restored exactly as scanner.BuildFindings reads it),
+// free-form Properties map (with the cryptamap: prefix stripped; the untrusted
+// "posture" claim is SANITIZED, not restored verbatim — see sanitizeIngestedPosture),
 // and folds the flat deeper-detail cryptamap:* props back into CryptoProps so
 // roadmap.primitiveFor and the dashboard detail panel see them again.
 func componentToAsset(c CDXComponent) models.CryptoAsset {
@@ -113,11 +123,17 @@ func componentToAsset(c CDXComponent) models.CryptoAsset {
 		Region:      props["region"],
 		ResourceARN: props["resourceArn"],
 	}
-	// Prefer the explicit resourceType property (emitted since the region-less S3
-	// ARN change); fall back to deriving from the ARN for older CBOMs that predate
-	// it. ResourceID always comes from the ARN (stable across both paths).
+	// Prefer the explicit resourceType/resourceId properties (emitted verbatim by
+	// buildCBOM); fall back to deriving from the ARN for older CBOMs that predate
+	// them. The fallback resourceFromARN splits on the LAST "/", which corrupts a
+	// slash-containing ResourceID (e.g. "alias/aws/dynamodb" would lose everything
+	// before the final slash), so the verbatim property always wins when present.
 	derivedType, derivedID := resourceFromARN(asset.ResourceARN)
-	asset.ResourceID = derivedID
+	if id := props["resourceId"]; id != "" {
+		asset.ResourceID = id
+	} else {
+		asset.ResourceID = derivedID
+	}
 	if rt := props["resourceType"]; rt != "" {
 		asset.ResourceType = rt
 	} else {
@@ -129,15 +145,32 @@ func componentToAsset(c CDXComponent) models.CryptoAsset {
 	}
 
 	// Free-form Properties: every cryptamap:* prop, de-prefixed. This restores
-	// Properties["posture"] (read by BuildFindings) plus all other scanner k/v
-	// (note, origin, rotationEnabled, runtime, etc.). The display/taxonomy props
-	// (displayName/awsCategory/cryptoFunction/subAspect) and the structural ones
-	// already mapped to dedicated fields (service/category/accountId/region/
-	// resourceArn) are skipped so the map mirrors a live scanner's Properties.
+	// all the scanner k/v (note, origin, rotationEnabled, runtime, etc.). The
+	// display/taxonomy props (displayName/awsCategory/cryptoFunction/subAspect)
+	// and the structural ones already mapped to dedicated fields (service/
+	// category/accountId/region/resourceArn) are skipped so the map mirrors a
+	// live scanner's Properties.
+	//
+	// SECURITY: "source" is deliberately NOT restored from the file. merge.sourceOf
+	// reads Properties["source"] as the FIRST precedence signal (active-probe /
+	// targeted-sdk outrank the config/tagging baselines), so honoring it from an
+	// untrusted ingested file would let a crafted shard set source="active-probe"
+	// and OUTRANK a genuine live scan in a merge. Dropping it forces sourceOf to
+	// fall back to this shard's Mode ("ingested" -> SourceUnknown, the lowest
+	// rank), so file input can never win a dedup collision against a live scan. No
+	// current scanner sets this property, so real scans are unaffected.
+	//
+	// SECURITY: "posture" is likewise in the skip set and is NOT restored
+	// verbatim. scanner.BuildFindings reads Properties["posture"] and SKIPS the
+	// finding entirely for posture=symmetric-only (B3 inventory-only), so a
+	// tampered CBOM could flip a vulnerable asset's posture to symmetric-only and
+	// silence the finding on ingest. The claim is re-added below through
+	// sanitizeIngestedPosture, which honors the finding-suppressing posture only
+	// when the component's own cryptoProperties corroborate it.
 	skip := map[string]struct{}{
 		"service": {}, "category": {}, "accountId": {}, "region": {},
-		"resourceArn": {}, "resourceType": {}, "displayName": {}, "awsCategory": {},
-		"cryptoFunction": {}, "subAspect": {},
+		"resourceArn": {}, "resourceType": {}, "resourceId": {}, "displayName": {}, "awsCategory": {},
+		"cryptoFunction": {}, "subAspect": {}, "source": {}, "posture": {},
 	}
 	for k, v := range props {
 		if _, drop := skip[k]; drop {
@@ -153,7 +186,108 @@ func componentToAsset(c CDXComponent) models.CryptoAsset {
 	}
 
 	foldDeeperDetail(&asset.CryptoProps, props)
+	// Re-add the posture claim only after the deeper detail is folded back, so
+	// the corroboration check sees the reconstructed CryptoProps.
+	sanitizeIngestedPosture(&asset, props["posture"])
 	return asset
+}
+
+// sanitizeIngestedPosture restores the untrusted posture claim from an ingested
+// CBOM onto asset.Properties["posture"], degrading the one FINDING-SUPPRESSING
+// value when the file's own crypto evidence does not back it up.
+//
+// SECURITY: posture=symmetric-only is the single posture scanner.BuildFindings
+// treats as inventory-only (B3) — it emits NO finding at all. A tampered CBOM
+// that flips a vulnerable asset's posture to symmetric-only would therefore
+// silence the finding on ingest (org-merge-files). We honor symmetric-only from
+// a file only when the component's cryptoProperties corroborate a symmetric
+// primitive; otherwise it degrades to PostureUnknown (MEDIUM, "needs
+// investigation" — the same fail-safe BuildFindings applies to unreadable
+// postures), with an explanatory note so the degradation is auditable. This is
+// deliberate minimal hardening: it raises tamper effort from a one-field flip
+// to a consistent multi-field forgery (mirroring the fail-closed
+// risk.IsMoscaEscalatable allowlist pattern); full protection requires shard
+// integrity verification (signing), which ingestion does not yet do — treat
+// org-merge-files output as only as trustworthy as its input shards.
+//
+// All other posture values round-trip verbatim: they either produce a finding
+// (vulnerable postures) or an Informational one (pqc-*), so they cannot make an
+// asset vanish from the finding stream.
+func sanitizeIngestedPosture(asset *models.CryptoAsset, claimed string) {
+	if claimed == "" {
+		return
+	}
+	if asset.Properties == nil {
+		asset.Properties = make(map[string]string)
+	}
+	if models.CryptoPosture(claimed) == models.PostureSymmetricOnly && !symmetricOnlyCorroborated(*asset) {
+		asset.Properties["posture"] = string(models.PostureUnknown)
+		note := `ingested posture "symmetric-only" not corroborated by cryptoProperties; degraded to "unknown"`
+		if prev := asset.Properties["note"]; prev != "" {
+			note = prev + "; " + note
+		}
+		asset.Properties["note"] = note
+		return
+	}
+	asset.Properties["posture"] = claimed
+}
+
+// symmetricOnlyCorroborated reports whether the reconstructed asset's own
+// crypto evidence supports a symmetric-only (quantum-resistant-at-rest)
+// posture: a symmetric algorithm primitive class, a symmetric algorithm/key
+// spec token (AES/SYMMETRIC_*/HMAC/3DES/MACsec), a symmetric key-material
+// block, a symmetric cipher suite (MACsec AES-GCM), or the documented
+// AWS-managed-key guarantee marker kms_usage stamps.
+func symmetricOnlyCorroborated(a models.CryptoAsset) bool {
+	if ap := a.CryptoProps.AlgorithmProperties; ap != nil {
+		switch ap.Primitive {
+		case models.PrimitiveAE, models.PrimitiveBlockCipher, models.PrimitiveMAC,
+			models.PrimitiveHash, models.PrimitiveKDF:
+			return true
+		}
+		if symmetricAlgoToken(ap.AlgorithmName) || symmetricAlgoToken(ap.KMSKeySpec) {
+			return true
+		}
+	}
+	if rm := a.CryptoProps.RelatedCryptoMaterialProperties; rm != nil {
+		// secret-key is symmetric by definition; a Secrets Manager "credential" is
+		// a KMS-AES-encrypted stored value (secrets_rotation's symmetric default).
+		if rm.Type == "secret-key" || rm.Type == "credential" || symmetricAlgoToken(rm.AlgorithmRef) {
+			return true
+		}
+	}
+	if pp := a.CryptoProps.ProtocolProperties; pp != nil {
+		// Direct Connect MACsec (AES-GCM) is the symmetric-only protocol case.
+		for _, cs := range pp.CipherSuites {
+			if symmetricAlgoToken(cs.Name) {
+				return true
+			}
+		}
+	}
+	// Free-form props that survive the round-trip: kms_usage's resolved target
+	// key spec and its AWS-managed lazy-alias documented guarantee.
+	if symmetricAlgoToken(a.Properties["targetKeySpec"]) {
+		return true
+	}
+	if a.Properties["awsManagedKeyGuarantee"] == "symmetric-only" {
+		return true
+	}
+	return false
+}
+
+// symmetricAlgoToken reports whether an algorithm/key-spec label names a
+// symmetric (Grover-only, quantum-resistant-grade) primitive.
+func symmetricAlgoToken(s string) bool {
+	if s == "" {
+		return false
+	}
+	u := strings.ToUpper(strings.ReplaceAll(s, "-", "_"))
+	return strings.Contains(u, "AES") ||
+		strings.HasPrefix(u, "SYMMETRIC") ||
+		strings.Contains(u, "HMAC") ||
+		strings.Contains(u, "TDES") || strings.Contains(u, "3DES") ||
+		strings.Contains(u, "MACSEC") ||
+		strings.Contains(u, "CHACHA")
 }
 
 // isDeeperDetailProp reports whether a (de-prefixed) property name is one of the

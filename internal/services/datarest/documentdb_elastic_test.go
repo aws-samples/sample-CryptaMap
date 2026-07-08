@@ -23,7 +23,7 @@ func TestClassifyDocumentDBElasticCluster(t *testing.T) {
 
 	t.Run("non-empty KmsKeyId is recorded verbatim", func(t *testing.T) {
 		key := "arn:aws:kms:us-east-1:111122223333:key/abcd-1234"
-		a := classifyDocumentDBElasticCluster(acct, reg, arn, name, key)
+		a := classifyDocumentDBElasticCluster(acct, reg, arn, name, key, false)
 		if got := a.Properties["kmsKeyId"]; got != key {
 			t.Errorf("kmsKeyId = %q, want %q (customer key recorded as-is)", got, key)
 		}
@@ -35,12 +35,32 @@ func TestClassifyDocumentDBElasticCluster(t *testing.T) {
 		}
 	})
 
-	t.Run("empty KmsKeyId falls back to AWS-owned key, posture unchanged", func(t *testing.T) {
-		a := classifyDocumentDBElasticCluster(acct, reg, arn, name, "")
+	t.Run("empty KmsKeyId from a successful describe falls back to AWS-owned key, posture unchanged", func(t *testing.T) {
+		a := classifyDocumentDBElasticCluster(acct, reg, arn, name, "", false)
 		if got := a.Properties["kmsKeyId"]; got != "AWS_OWNED_KMS_KEY" {
-			t.Errorf("kmsKeyId = %q, want AWS_OWNED_KMS_KEY (empty key / describe failure fallback)", got)
+			t.Errorf("kmsKeyId = %q, want AWS_OWNED_KMS_KEY (empty key on a successful describe)", got)
 		}
-		// The crux: a missing key (or describe failure) must NOT downgrade posture.
+		// The crux: a missing key must NOT downgrade posture.
+		if got := a.Properties["posture"]; got != string(models.PostureSymmetricOnly) {
+			t.Errorf("posture = %q, want %q (missing key must NOT downgrade)", got, models.PostureSymmetricOnly)
+		}
+	})
+
+	t.Run("GetCluster failure yields honest unknown custody, never AWS-owned", func(t *testing.T) {
+		// A describe FAILURE proves nothing about custody: the cluster may use a
+		// customer CMK the scanner role cannot read. Asserting AWS_OWNED_KMS_KEY
+		// would fabricate a "no customer CMK" verdict, so custody must be
+		// recorded as undetermined — with posture still SymmetricOnly (no opt-out).
+		a := classifyDocumentDBElasticCluster(acct, reg, arn, name, "", true)
+		if got := a.Properties["kmsKeyId"]; got != "UNRESOLVED" {
+			t.Errorf("kmsKeyId = %q, want UNRESOLVED (describe failed; custody never observed)", got)
+		}
+		if got := a.Properties["keyTier"]; got != "unknown" {
+			t.Errorf("keyTier = %q, want unknown", got)
+		}
+		if a.Properties["note"] == "" {
+			t.Error("expected an honesty note on the describe-failure path, got empty")
+		}
 		if got := a.Properties["posture"]; got != string(models.PostureSymmetricOnly) {
 			t.Errorf("posture = %q, want %q (describe failure must NOT downgrade)", got, models.PostureSymmetricOnly)
 		}
@@ -50,7 +70,7 @@ func TestClassifyDocumentDBElasticCluster(t *testing.T) {
 		// Both the key-present and key-absent paths must carry the same
 		// AES-256 at-rest crypto props and SymmetricOnly posture.
 		for _, key := range []string{"arn:aws:kms:us-east-1:111122223333:key/abcd-1234", ""} {
-			a := classifyDocumentDBElasticCluster(acct, reg, arn, name, key)
+			a := classifyDocumentDBElasticCluster(acct, reg, arn, name, key, false)
 			if got := a.Properties["posture"]; got != string(models.PostureSymmetricOnly) {
 				t.Errorf("kmsKeyId=%q: posture = %q, want %q", key, got, models.PostureSymmetricOnly)
 			}
@@ -68,7 +88,7 @@ func TestClassifyDocumentDBElasticCluster(t *testing.T) {
 	})
 
 	t.Run("empty clusterName is omitted", func(t *testing.T) {
-		a := classifyDocumentDBElasticCluster(acct, reg, arn, "", "")
+		a := classifyDocumentDBElasticCluster(acct, reg, arn, "", "", false)
 		if _, ok := a.Properties["clusterName"]; ok {
 			t.Errorf("clusterName property present for empty name, want omitted")
 		}

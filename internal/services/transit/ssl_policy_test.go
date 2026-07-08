@@ -72,3 +72,42 @@ func TestClassifySSLPolicyPQByName(t *testing.T) {
 		t.Errorf("classical policy wrongly flagged PQCHybrid")
 	}
 }
+
+// TestClassifySSLPolicyLegacyFloorWarnsRegardlessOfPQ pins the downgrade-warning
+// honesty fix: a legacy TLS 1.0/1.1 floor must ALWAYS surface a warning — for
+// classical policies just as for PQ-hybrid ones. Previously the warning fired
+// only when pqHybrid, so a classical policy with the same 1.0 floor was silently
+// scored clean.
+func TestClassifySSLPolicyLegacyFloorWarnsRegardlessOfPQ(t *testing.T) {
+	str := func(s string) *string { return &s }
+
+	// Classical policy with a TLS 1.0 floor under a 1.2 ceiling: MUST warn.
+	resClassical := classifySSLPolicy(elbv2types.SslPolicy{
+		SslProtocols: []string{"TLSv1", "TLSv1.1", "TLSv1.2"},
+		Ciphers:      []elbv2types.Cipher{{Name: str("ECDHE-RSA-AES128-SHA")}},
+	}, "ELBSecurityPolicy-2016-08")
+	if resClassical.warning == "" {
+		t.Errorf("classical policy with a TLS 1.0 floor must carry a downgrade warning, got empty")
+	}
+	if resClassical.props.ProtocolProperties.TLSMinVersion != "1.0" {
+		t.Errorf("TLSMinVersion = %q, want 1.0", resClassical.props.ProtocolProperties.TLSMinVersion)
+	}
+
+	// PQ-hybrid policy with a TLS 1.0 floor: still warns (and names the PQ bypass).
+	resPQ := classifySSLPolicy(elbv2types.SslPolicy{
+		SslProtocols: []string{"TLSv1", "TLSv1.2", "TLSv1.3"},
+		Ciphers:      []elbv2types.Cipher{{Name: str("TLS_AES_256_GCM_SHA384")}},
+	}, "ELBSecurityPolicy-TLS13-1-0-PQ-2025-09")
+	if resPQ.warning == "" {
+		t.Errorf("pq-hybrid policy with a TLS 1.0 floor must carry a downgrade warning, got empty")
+	}
+
+	// A clean modern floor (1.2+) must NOT warn — no false alarm.
+	resModern := classifySSLPolicy(elbv2types.SslPolicy{
+		SslProtocols: []string{"TLSv1.2", "TLSv1.3"},
+		Ciphers:      []elbv2types.Cipher{{Name: str("TLS_AES_256_GCM_SHA384")}},
+	}, "ELBSecurityPolicy-TLS13-1-2-2021-06")
+	if resModern.warning != "" {
+		t.Errorf("modern-floor policy must not warn, got %q", resModern.warning)
+	}
+}

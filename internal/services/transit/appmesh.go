@@ -122,11 +122,15 @@ func (s AppMeshScanner) describeNode(ctx context.Context, client appMeshAPI, acc
 	mode := "none"
 	for i, l := range out.VirtualNode.Spec.Listeners {
 		lp, lm := appMeshListenerPosture(l.Tls)
-		mode = lm
 		if i == 0 {
 			posture = lp
-		} else {
-			posture = weakerTransitPosture(posture, lp)
+			mode = lm
+		} else if weaker := weakerTransitPosture(posture, lp); weaker != posture {
+			// Keep the mode label in lockstep with the weakest-wins posture, so
+			// listenerTlsMode never reports a stronger listener's mode (e.g.
+			// "STRICT") alongside a no-encryption verdict from another listener.
+			posture = weaker
+			mode = lm
 		}
 	}
 

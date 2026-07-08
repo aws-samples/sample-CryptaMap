@@ -75,6 +75,7 @@ func (s DirectoryServiceScanner) scan(ctx context.Context, client directoryServi
 
 			posture := models.PostureUnknown
 			ldapsStatus := "Unknown"
+			observed := false
 			props := services.TLSProtocolPropsDoc("", "directory-ldaps", "low",
 				"https://docs.aws.amazon.com/directoryservice/latest/admin-guide/ms_ad_enable_ldap.html")
 
@@ -91,21 +92,55 @@ func (s DirectoryServiceScanner) scan(ctx context.Context, client directoryServi
 					fmt.Fprintf(os.Stderr, "directoryservice DescribeLDAPSSettings %s: %v\n", id, lerr)
 				}
 			} else if len(lout.LDAPSSettingsInfo) > 0 {
-				st := lout.LDAPSSettingsInfo[0].LDAPSStatus
-				ldapsStatus = string(st)
-				switch st {
-				case dstypes.LDAPSStatusEnabled:
-					// LDAPS on: classical TLS — encrypted but quantum-vulnerable.
-					posture = models.PostureNonPQCClassical
-				case dstypes.LDAPSStatusDisabled:
-					// LDAP channel not encrypted.
-					posture = models.PostureNoEncryption
-					props = services.NoEncryption()
+				// DescribeLDAPSSettings can return multiple rows (one per region
+				// for Multi-Region MicrosoftAD). Classify from the WEAKEST row:
+				// any Disabled region means plaintext LDAP is accepted somewhere,
+				// so reading only row[0] could report another region's Enabled
+				// state as the directory-wide verdict.
+				for _, row := range lout.LDAPSSettingsInfo {
+					st := row.LDAPSStatus
+					switch st {
+					case dstypes.LDAPSStatusEnabled:
+						// A real per-region LDAPS status read.
+						observed = true
+						if posture != models.PostureNoEncryption {
+							// LDAPS on: classical TLS — encrypted but quantum-vulnerable.
+							posture = models.PostureNonPQCClassical
+							ldapsStatus = string(st)
+							// This verdict is OBSERVED (a live LDAPS status read), so the
+							// protocol block must NOT claim source=aws-doc. Replace the
+							// doc-fact seed props (initialized for the Unknown/fallback
+							// path) with the plain observed block so the block's
+							// provenance agrees with the StampObserved stamp below.
+							props = services.TLSProtocolProps("", "directory-ldaps")
+						}
+					case dstypes.LDAPSStatusDisabled:
+						// LDAP channel not encrypted in at least one region — the
+						// weakest state wins. A real per-region LDAPS status read.
+						observed = true
+						posture = models.PostureNoEncryption
+						props = services.NoEncryption()
+						ldapsStatus = string(st)
+					default:
+						if ldapsStatus == "Unknown" {
+							ldapsStatus = string(st)
+						}
+					}
 				}
 			}
 
 			a := services.NewAsset("directoryservice", models.CategoryDataInTransit, accountID, region, id, "AWS::DirectoryService::MicrosoftAD", props)
 			services.PostureProperty(&a, posture)
+			// Enabled/Disabled are real per-region LDAPS status reads (observed);
+			// the Unknown/NotApplicable/SimpleAD fallbacks rest only on the LDAPS
+			// admin-guide doc. Stamp accordingly so an observed verdict is not
+			// laundered as a doc-fact and vice versa.
+			if observed {
+				services.StampObserved(&a, "high")
+			} else {
+				services.StampDocFact(&a, "low",
+					"https://docs.aws.amazon.com/directoryservice/latest/admin-guide/ms_ad_enable_ldap.html", "")
+			}
 			a.Properties["ldapsStatus"] = ldapsStatus
 			if dir.Type != "" {
 				a.Properties["directoryType"] = string(dir.Type)

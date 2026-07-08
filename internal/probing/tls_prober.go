@@ -54,11 +54,15 @@ func (p *Prober) Probe(ctx context.Context, host string, port int) ProbeResult {
 		ServerName:         stripPort(endpoint),
 		InsecureSkipVerify: true, // we capture the cert; we are not validating it
 	}
-	conn, err := tls.DialWithDialer(dialer, "tcp", endpoint, cfg)
+	// DialContext (not tls.DialWithDialer) so caller cancellation/deadlines are
+	// honored — otherwise a wired scan loop could not be cancelled mid-probe and
+	// each goroutine would park for the full Timeout.
+	tconn, err := (&tls.Dialer{NetDialer: dialer, Config: cfg}).DialContext(ctx, "tcp", endpoint)
 	if err != nil {
 		res.Error = err.Error()
 		return res
 	}
+	conn := tconn.(*tls.Conn)
 	defer conn.Close()
 	res.Reachable = true
 
@@ -150,8 +154,10 @@ func normalize(host string, port int) string {
 }
 
 func stripPort(endpoint string) string {
-	if i := strings.LastIndex(endpoint, ":"); i >= 0 {
-		return endpoint[:i]
+	// net.SplitHostPort handles bracketed IPv6 literals; a naive LastIndex(":")
+	// would mangle "::1"-style hosts into a broken ServerName.
+	if host, _, err := net.SplitHostPort(endpoint); err == nil {
+		return host
 	}
 	return endpoint
 }

@@ -31,6 +31,29 @@ func scanFileAgeDays(modTime time.Time) int {
 	return d
 }
 
+// scanTimestampFromName extracts the scan-completion timestamp the artifact
+// writers embed in filenames (…-20060102T150405Z.cbom.json). The FILENAME is
+// the authoritative freshness signal: file mtime is reset by the documented
+// S3-download / scp / checkout workflows, so an mtime-based age would report a
+// months-old scan as "0 day(s) old". Returns the zero time when no parseable
+// token is present (caller falls back to mtime).
+func scanTimestampFromName(path string) time.Time {
+	base := filepath.Base(path)
+	// Strip everything from the first extension dot, then take the trailing
+	// hyphen-separated token (e.g. "20260101T000000Z").
+	if i := strings.Index(base, "."); i >= 0 {
+		base = base[:i]
+	}
+	if i := strings.LastIndex(base, "-"); i >= 0 {
+		base = base[i+1:]
+	}
+	ts, err := time.Parse("20060102T150405Z", base)
+	if err != nil {
+		return time.Time{}
+	}
+	return ts
+}
+
 // serveFlags configure the local dashboard server.
 type serveFlags struct {
 	dir  string
@@ -158,8 +181,17 @@ func runServe(cmd *cobra.Command, f serveFlags) error {
 		// weeks-old scan is told rather than silently trusting drift. (Crypto
 		// posture changes as resources are created/rotated; a stale inventory
 		// misleads.)
-		if st, statErr := os.Stat(cbomPath); statErr == nil {
-			age := scanFileAgeDays(st.ModTime())
+		// Prefer the timestamp embedded in the filename over file mtime: the
+		// documented workflow downloads partials from S3 (or copies them between
+		// hosts), which resets mtime to "now" and would silently defeat this guard.
+		scanTime := scanTimestampFromName(cbomPath)
+		if scanTime.IsZero() {
+			if st, statErr := os.Stat(cbomPath); statErr == nil {
+				scanTime = st.ModTime()
+			}
+		}
+		if !scanTime.IsZero() {
+			age := scanFileAgeDays(scanTime)
 			fmt.Fprintf(cmd.OutOrStdout(), "  Scan age: %d day(s) old\n", age)
 			if age >= staleScanDays {
 				fmt.Fprintf(cmd.OutOrStdout(),
@@ -218,6 +250,23 @@ func loopbackHostGuard(next http.Handler, port int) http.Handler {
 			http.Error(w, "forbidden: CryptaMap serves loopback hosts only", http.StatusForbidden)
 			return
 		}
+		// Baseline security headers on every response: the served data is a
+		// cryptographic inventory of an AWS org, so it must never persist in a
+		// browser/proxy cache on a shared workstation (no-store), and responses
+		// must not be MIME-sniffed into an executable type (nosniff).
+		w.Header().Set("Cache-Control", "no-store")
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		// Defense-in-depth against clickjacking and data exfiltration: the CSP
+		// frame-ancestors 'none' is the load-bearing anti-clickjacking control
+		// (X-Frame-Options: DENY is the legacy backstop for older browsers that
+		// ignore frame-ancestors). Referrer-Policy: no-referrer keeps the
+		// (loopback) URL out of any outbound request. The CSP confines the SPA to
+		// its own origin; style-src 'unsafe-inline' and img/font-src data: are
+		// required by the Cloudscape/Vite bundle, and connect-src 'self' allows
+		// the dashboard's local-data fetches.
+		w.Header().Set("X-Frame-Options", "DENY")
+		w.Header().Set("Referrer-Policy", "no-referrer")
+		w.Header().Set("Content-Security-Policy", "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; object-src 'none'; base-uri 'none'")
 		next.ServeHTTP(w, r)
 	})
 }
@@ -274,6 +323,12 @@ func newDemoMux() *http.ServeMux {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"apiBase":"","mockMode":true}`))
 	})
+	// Demo mode bundles no downloadable artifacts, but the UI (and any script
+	// probing artifact availability) still fetches /artifacts/manifest.json.
+	// Without this route the request would fall into the SPA fallback and get a
+	// 200 text/html index.html — a JSON parse error masked by a success status.
+	// Serve an honest empty JSON manifest instead.
+	mux.HandleFunc("/artifacts/manifest.json", artifactManifestHandler(nil))
 	// /mock/org-cbom.json, /mock/roadmap.json AND the SPA assets are all served
 	// straight from the embedded webdist by spaHandler (vite copied public/mock
 	// into the bundle), so no on-disk file is read in demo mode.

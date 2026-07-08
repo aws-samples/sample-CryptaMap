@@ -84,6 +84,14 @@ func transferfamilyServerWithPolicy(serverID, policy string) *transfer.DescribeS
 	}
 }
 
+// transferfamilyServerWithProtocols builds a DescribeServerOutput carrying both
+// a security policy name and an enabled-protocols list.
+func transferfamilyServerWithProtocols(serverID, policy string, protocols ...transfertypes.Protocol) *transfer.DescribeServerOutput {
+	out := transferfamilyServerWithPolicy(serverID, policy)
+	out.Server.Protocols = protocols
+	return out
+}
+
 // transferfamilyAssetByID returns the first asset with the given ResourceID.
 func transferfamilyAssetByID(assets []models.CryptoAsset, id string) (models.CryptoAsset, bool) {
 	for _, a := range assets {
@@ -279,5 +287,152 @@ func TestTransferFamilyScanPolicyNameFallbackUnknown(t *testing.T) {
 	}
 	if client.describePolicyCalls == 0 {
 		t.Error("expected DescribeSecurityPolicy to be attempted for a server with a named policy")
+	}
+	// Verdict-honesty: an Unknown-posture asset must NOT carry a fabricated concrete
+	// TLS version — nothing read it. The old code defaulted ver="1.2".
+	if pp := a.CryptoProps.ProtocolProperties; pp != nil && pp.Version != "" {
+		t.Errorf("Unknown posture must not assert a concrete TLS version, got Version=%q", pp.Version)
+	}
+	// And it must explain WHY it is undetermined rather than be a silent blank.
+	if a.Properties["note"] == "" {
+		t.Error("expected an explanatory note on the Unknown-posture path")
+	}
+}
+
+// TestTransferFamilyScanFTPOnlyIsNoEncryption verifies the plaintext-FTP
+// honesty fix: a server whose ONLY enabled protocol is FTP (unencrypted per
+// AWS) must be reported as no-encryption — even when its security policy is a
+// PQ policy with ML-KEM KEXs, because the policy governs only encrypted
+// protocols and FTP traffic bypasses it entirely. Previously the scanner never
+// read Server.Protocols and stamped PQCHybrid on plaintext-FTP servers.
+func TestTransferFamilyScanFTPOnlyIsNoEncryption(t *testing.T) {
+	const policy = "TransferSecurityPolicy-2025-03"
+	client := &fakeTransferClient{
+		listPages: []*transfer.ListServersOutput{
+			{Servers: []transfertypes.ListedServer{{ServerId: transferfamilyStrptr("s-ftp")}}},
+		},
+		describeServers: map[string]*transfer.DescribeServerOutput{
+			"s-ftp": transferfamilyServerWithProtocols("s-ftp", policy, transfertypes.ProtocolFtp),
+		},
+		describePolicies: map[string]*transfer.DescribeSecurityPolicyOutput{
+			policy: {
+				SecurityPolicy: &transfertypes.DescribedSecurityPolicy{
+					SecurityPolicyName: transferfamilyStrptr(policy),
+					SshKexs:            []string{"mlkem768x25519-sha256"},
+				},
+			},
+		},
+	}
+	assets, err := TransferFamilyScanner{}.scan(context.Background(), client, "111122223333", "us-east-1")
+	if err != nil {
+		t.Fatalf("scan returned unexpected error: %v", err)
+	}
+	a, ok := transferfamilyAssetByID(assets, "s-ftp")
+	if !ok {
+		t.Fatalf("expected server s-ftp as an asset; assets=%+v", assets)
+	}
+	if got := transferfamilyPostureOf(a); got != string(models.PostureNoEncryption) {
+		t.Errorf("FTP-only server must report no-encryption (FTP is plaintext), got %q", got)
+	}
+	if a.Properties["note"] == "" {
+		t.Error("expected an explanatory note naming the plaintext FTP protocol")
+	}
+	if a.Properties["transitEncryptionEnforced"] != "false" {
+		t.Errorf("expected transitEncryptionEnforced=false, got %q", a.Properties["transitEncryptionEnforced"])
+	}
+	if a.Properties["protocols"] != "FTP" {
+		t.Errorf("expected protocols property %q, got %q", "FTP", a.Properties["protocols"])
+	}
+}
+
+// TestTransferFamilyScanFTPMixedIsNotEnforced verifies the mixed case: FTP
+// enabled alongside SFTP means encryption is offered but NOT enforced —
+// mirroring MSK's TLS_PLAINTEXT handling, the verdict is legacy-tls (the
+// weakened-transit signal) with a note, never the clean PQ/classical posture
+// derived from the security policy.
+func TestTransferFamilyScanFTPMixedIsNotEnforced(t *testing.T) {
+	const policy = "TransferSecurityPolicy-2025-03"
+	client := &fakeTransferClient{
+		listPages: []*transfer.ListServersOutput{
+			{Servers: []transfertypes.ListedServer{{ServerId: transferfamilyStrptr("s-mixed")}}},
+		},
+		describeServers: map[string]*transfer.DescribeServerOutput{
+			"s-mixed": transferfamilyServerWithProtocols("s-mixed", policy, transfertypes.ProtocolSftp, transfertypes.ProtocolFtp),
+		},
+		describePolicies: map[string]*transfer.DescribeSecurityPolicyOutput{
+			policy: {
+				SecurityPolicy: &transfertypes.DescribedSecurityPolicy{
+					SecurityPolicyName: transferfamilyStrptr(policy),
+					SshKexs:            []string{"mlkem768x25519-sha256"},
+				},
+			},
+		},
+	}
+	assets, err := TransferFamilyScanner{}.scan(context.Background(), client, "111122223333", "us-east-1")
+	if err != nil {
+		t.Fatalf("scan returned unexpected error: %v", err)
+	}
+	a, ok := transferfamilyAssetByID(assets, "s-mixed")
+	if !ok {
+		t.Fatalf("expected server s-mixed as an asset; assets=%+v", assets)
+	}
+	got := transferfamilyPostureOf(a)
+	if got == string(models.PosturePQCHybrid) || got == string(models.PostureNonPQCClassical) {
+		t.Errorf("a server accepting plaintext FTP must not carry the clean policy-derived posture, got %q", got)
+	}
+	if got != string(models.PostureLegacyTLS) {
+		t.Errorf("expected legacy-tls (mixed/not-enforced, mirroring MSK TLS_PLAINTEXT), got %q", got)
+	}
+	if a.Properties["transitEncryptionEnforced"] != "false" {
+		t.Errorf("expected transitEncryptionEnforced=false, got %q", a.Properties["transitEncryptionEnforced"])
+	}
+	// The PQCHybrid FLAG must also be cleared on a plaintext-accepting server, not
+	// just the posture string: a consumer keying on ProtocolProperties.PQCHybrid
+	// must not count an FTP-mixed server as post-quantum protected.
+	if pp := a.CryptoProps.ProtocolProperties; pp != nil && pp.PQCHybrid {
+		t.Error("FTP-mixed server must not carry ProtocolProperties.PQCHybrid=true (plaintext FTP is not PQ-protected)")
+	}
+	if a.Properties["note"] == "" {
+		t.Error("expected an explanatory note naming the plaintext FTP protocol")
+	}
+}
+
+// TestTransferFamilyScanEncryptedProtocolsKeepPolicyPosture verifies no
+// fabricated alarm: a server with only encrypted protocols (SFTP) keeps its
+// KEX-derived posture, and no plaintext note or enforcement downgrade appears.
+func TestTransferFamilyScanEncryptedProtocolsKeepPolicyPosture(t *testing.T) {
+	const policy = "TransferSecurityPolicy-2025-03"
+	client := &fakeTransferClient{
+		listPages: []*transfer.ListServersOutput{
+			{Servers: []transfertypes.ListedServer{{ServerId: transferfamilyStrptr("s-sftp")}}},
+		},
+		describeServers: map[string]*transfer.DescribeServerOutput{
+			"s-sftp": transferfamilyServerWithProtocols("s-sftp", policy, transfertypes.ProtocolSftp),
+		},
+		describePolicies: map[string]*transfer.DescribeSecurityPolicyOutput{
+			policy: {
+				SecurityPolicy: &transfertypes.DescribedSecurityPolicy{
+					SecurityPolicyName: transferfamilyStrptr(policy),
+					SshKexs:            []string{"mlkem768x25519-sha256"},
+				},
+			},
+		},
+	}
+	assets, err := TransferFamilyScanner{}.scan(context.Background(), client, "111122223333", "us-east-1")
+	if err != nil {
+		t.Fatalf("scan returned unexpected error: %v", err)
+	}
+	a, ok := transferfamilyAssetByID(assets, "s-sftp")
+	if !ok {
+		t.Fatalf("expected server s-sftp as an asset; assets=%+v", assets)
+	}
+	if got := transferfamilyPostureOf(a); got != string(models.PosturePQCHybrid) {
+		t.Errorf("SFTP-only server with ML-KEM KEXs must keep the PQCHybrid posture, got %q", got)
+	}
+	if a.Properties["transitEncryptionEnforced"] != "" {
+		t.Errorf("no FTP present: transitEncryptionEnforced must not be stamped, got %q", a.Properties["transitEncryptionEnforced"])
+	}
+	if a.Properties["protocols"] != "SFTP" {
+		t.Errorf("expected protocols property %q, got %q", "SFTP", a.Properties["protocols"])
 	}
 }

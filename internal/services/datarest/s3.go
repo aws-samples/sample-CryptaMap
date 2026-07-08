@@ -267,13 +267,24 @@ func s3PropsForSSE(ctx context.Context, kmsClient s3KMSAPI, sseAlgorithm, kmsMas
 		if kmsMasterKeyID != "" {
 			if d, derr := kmsClient.DescribeKey(ctx, &kms.DescribeKeyInput{KeyId: &kmsMasterKeyID}); derr != nil {
 				fmt.Fprintf(os.Stderr, "s3 SSE-KMS DescribeKey %s: %v\n", kmsMasterKeyID, derr)
+				// A configured key whose DescribeKey failed (denied/cross-account/
+				// pending deletion) must NOT be recorded as an observed
+				// SYMMETRIC_DEFAULT — that would fabricate a key-spec observation
+				// for a key we could not read. Leave the spec unresolved (the flat
+				// kmsKeySpec property is omitted) while the AES-256 SSE-KMS posture
+				// stands on the bucket's own encryption configuration.
+				*outKeySpec = ""
+				cp := services.AESAtRest()
+				labelS3KMS(cp)
+				return cp
 			} else if d.KeyMetadata != nil {
 				keySpec = string(d.KeyMetadata.KeySpec)
 			}
 		}
 		if keySpec == "" {
-			// SSE-KMS with an AWS-managed/aws/s3 key (no readable spec) is still
-			// AES-256-GCM under the hood; record SYMMETRIC_DEFAULT.
+			// SSE-KMS with an AWS-managed/aws/s3 key (no explicit KMSMasterKeyID, so
+			// no spec to read) is still AES-256-GCM under the hood; record the
+			// documented SYMMETRIC_DEFAULT.
 			keySpec = "SYMMETRIC_DEFAULT"
 		}
 		*outKeySpec = keySpec

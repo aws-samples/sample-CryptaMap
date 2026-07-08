@@ -1,3 +1,4 @@
+import { useNavigate } from 'react-router-dom';
 import Container from '@cloudscape-design/components/container';
 import Header from '@cloudscape-design/components/header';
 import Box from '@cloudscape-design/components/box';
@@ -62,6 +63,7 @@ export default function KpiCards({
   scannedAt,
   quickWins,
 }: Props) {
+  const navigate = useNavigate();
   // Coverage is CONTEXT for the metrics (which accounts/regions these numbers
   // cover), not a metric itself — so it rides in the panel header as a caption
   // rather than as an orphaned 9th tile in the 4-column grid.
@@ -94,8 +96,10 @@ export default function KpiCards({
         <Kpi
           label="% on PQC end-to-end"
           value={`${maturity.pqcEndToEndPct}%`}
-          color="text-status-success"
-          sub={`Fully migrated to post-quantum cryptography (of ${maturity.total}; hybrid + AES-256-at-rest NOT counted)`}
+          // Only claim success when something has actually migrated: a big green
+          // 0% would misreport a nothing-migrated posture as an achievement.
+          color={maturity.pqcEndToEndPct > 0 ? 'text-status-success' : 'inherit'}
+          sub={`Fully migrated to post-quantum cryptography (of ${maturity.total}; hybrid + symmetric-at-rest NOT counted)`}
         />
       </ColumnLayout>
 
@@ -119,10 +123,10 @@ export default function KpiCards({
             sub="Legacy TLS / traditional RSA-ECC — migrate to PQC"
           />
           <Kpi
-            label="Quantum-resistant at rest (symmetric AES-256)"
+            label="Quantum-resistant at rest (symmetric encryption)"
             value={maturity.symmetricOnly}
             color="inherit"
-            sub="AES-256 at rest — inventory, not a PQC-migration item"
+            sub="Symmetric encryption at rest — inventory, not a PQC-migration item"
           />
           <Kpi
             label="Hybrid PQ key exchange, traditional certificate"
@@ -151,7 +155,19 @@ export default function KpiCards({
             label="Quick-wins available"
             value={quickWins}
             color={quickWins > 0 ? 'text-status-success' : 'inherit'}
-            sub={<Link href="/roadmap">One-flip PQC upgrades →</Link>}
+            sub={
+              // Intercept and route client-side (matches ReportsTeaser / AppShell):
+              // a raw href triggers a full document reload and drops SPA state.
+              <Link
+                href="/roadmap"
+                onFollow={(e) => {
+                  e.preventDefault();
+                  navigate('/roadmap');
+                }}
+              >
+                One-flip PQC upgrades →
+              </Link>
+            }
           />
         </ColumnLayout>
       </Box>

@@ -1,4 +1,4 @@
-import type { CBOM, ScanResult } from '../types';
+import type { CBOM } from '../types';
 import type { Roadmap } from '../types/roadmap';
 import { summarizePosture, summarizeMaturity, realComponents } from '../hooks/useScanData';
 
@@ -156,6 +156,37 @@ export function summaryFromCBOM(cbom: CBOM): Summary {
     if (isCritical) row.critical++;
     perAccount.set(acct, row);
   }
+  // Coverage barrier: a merged org CBOM carries the completion stamp in its
+  // top-level metadata.properties (internal/output/cyclonedx.go coverageProps:
+  // cryptamap:incomplete + the shard reconciliation counts). Read it so an
+  // incomplete org scan is NEVER surfaced as a clean, silently-smaller result.
+  // A true single local scan has NO cryptamap:incomplete stamp, so it falls back
+  // to complete=true with a zero shard barrier — behavior unchanged.
+  const meta = cbom.metadata?.properties ?? [];
+  const metaVal = (name: string) => meta.find((x) => x.name === name)?.value;
+  const incompleteStamp = metaVal('cryptamap:incomplete');
+  if (incompleteStamp === undefined) {
+    return {
+      totalAssets: components.length,
+      totalCritical,
+      perAccount: Array.from(perAccount.values()),
+      perPosture,
+      quantumVulnerablePct: maturity.quantumVulnerablePct,
+      pqcEndToEndPct: maturity.pqcEndToEndPct,
+      // A local single CBOM is the whole scan by definition: no shard barrier.
+      expectedShards: 0,
+      observedShards: 0,
+      missingShards: 0,
+      complete: true,
+      incomplete: false,
+      failedShards: [],
+    };
+  }
+  const num = (name: string) => {
+    const n = Number(metaVal(name));
+    return Number.isFinite(n) ? n : 0;
+  };
+  const incomplete = incompleteStamp === 'true';
   return {
     totalAssets: components.length,
     totalCritical,
@@ -163,32 +194,17 @@ export function summaryFromCBOM(cbom: CBOM): Summary {
     perPosture,
     quantumVulnerablePct: maturity.quantumVulnerablePct,
     pqcEndToEndPct: maturity.pqcEndToEndPct,
-    // A local single CBOM is the whole scan by definition: no shard barrier.
-    expectedShards: 0,
-    observedShards: 0,
-    missingShards: 0,
-    complete: true,
-    incomplete: false,
+    expectedShards: num('cryptamap:expectedShards'),
+    observedShards: num('cryptamap:observedShards'),
+    missingShards: num('cryptamap:missingShards'),
+    complete: !incomplete,
+    incomplete,
+    // The CBOM stamp carries only the failed-shard COUNT (cryptamap:failedShards),
+    // not the per-tuple detail; the detailed list lives in the /summary artifact.
+    // Leave the detail list empty here so the banner falls back to the count-only
+    // message rather than fabricating tuples.
     failedShards: [],
   };
-}
-
-export async function fetchScans(): Promise<ScanResult[]> {
-  const cfg = await getRuntimeConfig();
-  if (cfg.mockMode || !cfg.apiBase) return [];
-  const res = await fetch(`${cfg.apiBase}/scans`);
-  if (!res.ok) return [];
-  const body = await res.json();
-  return body.scans ?? [];
-}
-
-export async function fetchHistory(accountId: string, region: string): Promise<ScanResult[]> {
-  const cfg = await getRuntimeConfig();
-  if (cfg.mockMode || !cfg.apiBase) return [];
-  const res = await fetch(`${cfg.apiBase}/history/${accountId}/${region}`);
-  if (!res.ok) return [];
-  const body = await res.json();
-  return body.history ?? [];
 }
 
 // fetchRoadmap mirrors fetchLatestCBOM: in mock mode (or with no apiBase) it

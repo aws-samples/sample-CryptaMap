@@ -14,6 +14,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/aws-samples/cryptamap/internal/pqc"
+	"github.com/aws-samples/cryptamap/internal/services"
 	"github.com/aws-samples/cryptamap/internal/taxonomy"
 	"github.com/aws-samples/cryptamap/pkg/models"
 )
@@ -84,12 +85,12 @@ func buildCBOM(scan models.ScanResult) CDXBOM {
 				Type: "application", Name: "cryptamap-scan",
 				BomRef: "cryptamap-scan-" + scan.ScanID,
 			},
-			Properties: append([]CDXProperty{
+			Properties: append(append([]CDXProperty{
 				{Name: "cryptamap:scanId", Value: scan.ScanID},
 				{Name: "cryptamap:accountId", Value: scan.AccountID},
 				{Name: "cryptamap:region", Value: scan.Region},
 				{Name: "cryptamap:mode", Value: scan.Mode},
-			}, knowledgeProvenanceProps()...),
+			}, append(coverageProps(scan.Coverage), scanIncompletenessProps(scan)...)...), knowledgeProvenanceProps()...),
 		},
 		Components: make([]CDXComponent, 0, len(scan.Assets)),
 	}
@@ -124,6 +125,13 @@ func buildCBOM(scan models.ScanResult) CDXBOM {
 		// service. Older CBOMs without this prop still fall back to resourceFromARN.
 		if a.ResourceType != "" {
 			props = append(props, CDXProperty{Name: "cryptamap:resourceType", Value: a.ResourceType})
+		}
+		// Emit ResourceID verbatim for the same losslessness reason: the ARN-only
+		// fallback (resourceFromARN) splits on the LAST "/", so a slash-containing
+		// ID like "alias/aws/dynamodb" or an S3-path-style ID would be corrupted on
+		// re-ingest. Older CBOMs without this prop still fall back to the ARN.
+		if a.ResourceID != "" {
+			props = append(props, CDXProperty{Name: "cryptamap:resourceId", Value: a.ResourceID})
 		}
 		// Emit friendly taxonomy only when non-empty so the unknown/fallback
 		// case stays clean (all forms are schema-valid name/value properties).
@@ -353,6 +361,82 @@ func algorithmBomRef(token string, used map[string]struct{}) string {
 }
 
 // knowledgeProvenanceProps renders the active PQC-knowledge freshness/provenance
+// coverageProps stamps the org-merge completion barrier into the CBOM
+// metadata.properties so a consumer handed ONLY the merged CBOM (not the
+// side-car summary JSON) can tell a partial-coverage org scan from a clean one.
+// Returns nil for a single live scan (cov == nil), which adds no properties and
+// leaves single-shard CBOMs byte-identical to before. When present it always
+// emits cryptamap:incomplete (true/false) as the loud headline plus the shard
+// reconciliation counts, mirroring the merge summary's loud-incomplete report.
+func coverageProps(cov *models.MergeCoverage) []CDXProperty {
+	if cov == nil {
+		return nil
+	}
+	return []CDXProperty{
+		{Name: "cryptamap:incomplete", Value: strconv.FormatBool(cov.Incomplete)},
+		{Name: "cryptamap:expectedShards", Value: strconv.Itoa(cov.ExpectedShards)},
+		{Name: "cryptamap:observedShards", Value: strconv.Itoa(cov.ObservedShards)},
+		{Name: "cryptamap:missingShards", Value: strconv.Itoa(cov.MissingShards)},
+		{Name: "cryptamap:failedShards", Value: strconv.Itoa(cov.FailedShards)},
+	}
+}
+
+// scanIncompletenessProps stamps SINGLE-SCAN incompleteness onto the CBOM
+// metadata, the counterpart of coverageProps for the shard itself: coverageProps
+// answers "did every org shard report?", this answers "is THIS shard's own
+// inventory complete?". Without it, a single-scan CBOM whose scanners were
+// truncated at a cap or errored out carried NO machine-readable marker — the
+// only trail was stderr, invisible to any consumer handed just the CBOM file.
+//
+// Emitted properties (all omitted when the scan is clean, so a clean CBOM is
+// byte-identical to before):
+//   - cryptamap:truncated ("true") + cryptamap:truncatedServices (comma-joined,
+//     sorted) when any scanner hit services.MaxAssetsPerScanner or the
+//     per-service engine cap (identified by the services.TruncationSentinel
+//     entry the engine appends to ServiceScanReport.Errors);
+//   - cryptamap:scanErrors (count) + cryptamap:erroredServices (comma-joined,
+//     sorted) when any scanner returned a real error, so "0 assets" from an
+//     auth/permission failure is distinguishable from a legitimately empty
+//     account.
+func scanIncompletenessProps(scan models.ScanResult) []CDXProperty {
+	var truncated, errored []string
+	for _, st := range scan.ServiceStats {
+		isTrunc, isErr := false, false
+		for _, e := range st.Errors {
+			if strings.HasPrefix(e, services.TruncationSentinel) {
+				isTrunc = true
+			} else {
+				isErr = true
+			}
+		}
+		if isTrunc {
+			truncated = append(truncated, st.Service)
+		}
+		if isErr {
+			errored = append(errored, st.Service)
+		}
+	}
+	if len(truncated) == 0 && len(errored) == 0 {
+		return nil
+	}
+	var props []CDXProperty
+	if len(truncated) > 0 {
+		sort.Strings(truncated)
+		props = append(props,
+			CDXProperty{Name: "cryptamap:truncated", Value: "true"},
+			CDXProperty{Name: "cryptamap:truncatedServices", Value: strings.Join(truncated, ",")},
+		)
+	}
+	if len(errored) > 0 {
+		sort.Strings(errored)
+		props = append(props,
+			CDXProperty{Name: "cryptamap:scanErrors", Value: strconv.Itoa(len(errored))},
+			CDXProperty{Name: "cryptamap:erroredServices", Value: strings.Join(errored, ",")},
+		)
+	}
+	return props
+}
+
 // snapshot as flat knowledge: namespaced metadata properties, so every CBOM
 // records HOW FRESH the post-quantum knowledge was at scan time (source =
 // embedded air-gap floor vs. a validated newer override; the knowledge version;
@@ -526,6 +610,11 @@ func sanitizeForCDX(cp models.CryptoProperties) models.CryptoProperties {
 		// (a.Properties["source"] -> deeperDetailProps emits nothing for it, but the
 		// raw scanner property is carried via the a.Properties loop in buildCBOM).
 		pp.Source = ""
+		// DocConfidence/DocSourceURL are the same non-schema aws-doc provenance
+		// carried on the protocol block; strip them for the same reason (the
+		// auditable copy is the asset-level StampDocFact confidence/sourceUrl).
+		pp.DocConfidence = ""
+		pp.DocSourceURL = ""
 		out.ProtocolProperties = &pp
 	}
 	if cp.RelatedCryptoMaterialProperties != nil {

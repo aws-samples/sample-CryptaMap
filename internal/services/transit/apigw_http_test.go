@@ -8,6 +8,8 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	apigwv2 "github.com/aws/aws-sdk-go-v2/service/apigatewayv2"
 	apigwv2types "github.com/aws/aws-sdk-go-v2/service/apigatewayv2/types"
+
+	"github.com/aws-samples/cryptamap/pkg/models"
 )
 
 // fakeAPIGWHTTPClient is a hand-rolled apigwv2HTTPAPI for unit-testing the
@@ -99,5 +101,67 @@ func TestAPIGWHTTPScanDomainNamesErrorPropagates(t *testing.T) {
 	}
 	if !errors.Is(err, sentinel) {
 		t.Errorf("expected returned error to wrap the GetDomainNames failure, got: %v", err)
+	}
+}
+
+// TestAPIGWHTTPScanClassifiesDomains covers the custom-domain classification path
+// (a prior test gap: only GetApis pagination + the domain-error path were tested,
+// never the DomainNameConfigurations -> SecurityPolicy -> posture/version logic).
+// A TLS_1_2 domain must classify as NonPQCClassical with a 1.2 floor; a TLS_1_0
+// domain must be the honest weaker verdict PostureLegacyTLS with a 1.0 floor (the
+// scanner reads the SecurityPolicy enum, which IS the documented TLS floor).
+func TestAPIGWHTTPScanClassifiesDomains(t *testing.T) {
+	client := &fakeAPIGWHTTPClient{
+		apisPages: []*apigwv2.GetApisOutput{{}}, // no APIs; focus on the domain path
+		domainsOut: &apigwv2.GetDomainNamesOutput{
+			Items: []apigwv2types.DomainName{
+				{
+					DomainName: strptr("api.modern.example"),
+					DomainNameConfigurations: []apigwv2types.DomainNameConfiguration{
+						{SecurityPolicy: apigwv2types.SecurityPolicyTls12},
+					},
+				},
+				{
+					DomainName: strptr("api.legacy.example"),
+					DomainNameConfigurations: []apigwv2types.DomainNameConfiguration{
+						{SecurityPolicy: apigwv2types.SecurityPolicyTls10},
+					},
+				},
+			},
+		},
+	}
+	resolver := newACMCertResolver(aws.Config{})
+	assets, err := APIGWHTTPScanner{}.scan(context.Background(), client, resolver, "111122223333", "us-east-1")
+	if err != nil {
+		t.Fatalf("scan returned unexpected error: %v", err)
+	}
+
+	byID := map[string]models.CryptoAsset{}
+	for _, a := range assets {
+		if a.ResourceType == "AWS::ApiGatewayV2::DomainName" {
+			byID[a.ResourceID] = a
+		}
+	}
+
+	modern, ok := byID["api.modern.example"]
+	if !ok {
+		t.Fatalf("TLS_1_2 domain missing from assets; got %v", byID)
+	}
+	if got := modern.Properties["posture"]; got != string(models.PostureNonPQCClassical) {
+		t.Errorf("TLS_1_2 domain: posture=%q, want non-pqc-classical", got)
+	}
+	if pp := modern.CryptoProps.ProtocolProperties; pp == nil || pp.TLSMinVersion != "1.2" {
+		t.Errorf("TLS_1_2 domain: want TLSMinVersion 1.2, got %+v", modern.CryptoProps.ProtocolProperties)
+	}
+
+	legacy, ok := byID["api.legacy.example"]
+	if !ok {
+		t.Fatalf("TLS_1_0 domain missing from assets; got %v", byID)
+	}
+	if got := legacy.Properties["posture"]; got != string(models.PostureLegacyTLS) {
+		t.Errorf("TLS_1_0 domain: posture=%q, want legacy-tls (the honest weaker verdict, not a clean 1.2)", got)
+	}
+	if pp := legacy.CryptoProps.ProtocolProperties; pp == nil || pp.TLSMinVersion != "1.0" {
+		t.Errorf("TLS_1_0 domain: want TLSMinVersion 1.0, got %+v", legacy.CryptoProps.ProtocolProperties)
 	}
 }

@@ -142,6 +142,64 @@ func TestParseLambdaEventScanCarriesRunID(t *testing.T) {
 	}
 }
 
+// TestValidateLambdaEvent asserts the event-contract guard: BOTH merge tiers
+// (final Merge and per-account MergeAccount) require a RunID, since each scopes
+// its S3 listing to scans/{raw,account-merged}/<runId>/ — a merge without a
+// runId would silently list nothing. Scan events (no merge flag) never require
+// a runId.
+func TestValidateLambdaEvent(t *testing.T) {
+	tests := []struct {
+		name    string
+		evt     LambdaEvent
+		wantErr bool
+	}{
+		{
+			name:    "merge with runId is valid",
+			evt:     LambdaEvent{Merge: true, RunID: "run-abc"},
+			wantErr: false,
+		},
+		{
+			name:    "merge without runId is rejected",
+			evt:     LambdaEvent{Merge: true},
+			wantErr: true,
+		},
+		{
+			name:    "mergeAccount without runId is rejected",
+			evt:     LambdaEvent{MergeAccount: true, AccountID: "111122223333"},
+			wantErr: true,
+		},
+		{
+			name:    "mergeAccount with runId is valid",
+			evt:     LambdaEvent{MergeAccount: true, RunID: "run-abc", AccountID: "111122223333"},
+			wantErr: false,
+		},
+		{
+			name:    "scan without runId is valid",
+			evt:     LambdaEvent{Mode: "lambda", AccountID: "111122223333", Region: "us-east-1"},
+			wantErr: false,
+		},
+		{
+			// A plural "regions" list is not the fan-out contract (one singular
+			// region per invocation); it was previously silently ignored →
+			// single-region scan masquerading as multi-region coverage.
+			name:    "regions list is rejected",
+			evt:     LambdaEvent{Regions: []string{"ap-south-1", "ap-south-2"}},
+			wantErr: true,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			err := validateLambdaEvent(tc.evt)
+			if tc.wantErr && err == nil {
+				t.Errorf("validateLambdaEvent(%+v): got nil error, want error", tc.evt)
+			}
+			if !tc.wantErr && err != nil {
+				t.Errorf("validateLambdaEvent(%+v): got error %v, want nil", tc.evt, err)
+			}
+		})
+	}
+}
+
 // TestRawScanKey asserts the exact raw-shard key shape and the empty-runId
 // fallback that keeps single-account scheduled scans out of any org-run prefix.
 func TestRawScanKey(t *testing.T) {
@@ -611,6 +669,96 @@ func TestMergeFailedShardReport(t *testing.T) {
 	}
 }
 
+// TestMergeErroredShardOnlyForcesIncomplete isolates the errored-shard barrier:
+// every expected shard LANDS (observed==expected, no vanished gap) and there is
+// no missing per-account object, but one landed shard reported service-scan
+// errors. This is the "partial CBOM that looks complete" case — before the
+// errored-shard barrier fix, complete stayed true (flipped only by the count gap
+// or a missing account, neither present here) and the loud-incomplete banner
+// never fired. It must now report Incomplete=true with the errored tuple named.
+func TestMergeErroredShardOnlyForcesIncomplete(t *testing.T) {
+	clean := mkRawShard("111111111111", "us-east-1", "arn:aws:s3:::clean", models.SeverityInformational)
+	errored := mkRawShard("222222222222", "us-east-1", "arn:aws:s3:::bad", models.SeverityInformational)
+	errored.ServiceStats = []models.ServiceScanReport{{
+		Service: "s3",
+		Errors:  []string{"AccessDenied: describe call denied for half the services"},
+	}}
+	res := mergeRawShards([]models.ScanResult{clean, errored})
+	keys := mergedKeys("run-e")
+
+	// expected==observed==2, empty account barrier: the ONLY incompleteness signal
+	// is the errored shard.
+	s := buildMergeSummary(res, "run-e", keys, 2, accountBarrier{})
+	if s.MissingShards != 0 {
+		t.Fatalf("precondition: MissingShards=%d, want 0 (no vanished gap in this case)", s.MissingShards)
+	}
+	if s.Complete || !s.Incomplete {
+		t.Errorf("errored shard with full count must force complete=false/incomplete=true, got complete=%v incomplete=%v", s.Complete, s.Incomplete)
+	}
+	if s.Failed != 1 {
+		t.Errorf("Failed: got=%d want=1", s.Failed)
+	}
+	if len(s.FailedShards) != 1 || s.FailedShards[0].AccountID != "222222222222" {
+		t.Errorf("FailedShards: got=%+v want one row for 222222222222", s.FailedShards)
+	}
+}
+
+// TestMergedCBOMStampsIncompleteness proves the coverage barrier reaches the
+// canonical CBOM: buildMergeArtifacts must stamp cryptamap:incomplete plus the
+// shard reconciliation counts into the merged CBOM's metadata.properties, so an
+// auditor handed only the CBOM (not the side-car summary JSON) can tell a
+// decimated org scan from a clean one.
+func TestMergedCBOMStampsIncompleteness(t *testing.T) {
+	clean := mkRawShard("111111111111", "us-east-1", "arn:aws:s3:::clean", models.SeverityInformational)
+	errored := mkRawShard("222222222222", "us-east-1", "arn:aws:s3:::bad", models.SeverityInformational)
+	errored.ServiceStats = []models.ServiceScanReport{{Service: "s3", Errors: []string{"AccessDenied"}}}
+	res := mergeRawShards([]models.ScanResult{clean, errored})
+
+	// expected=3, observed=2 -> a vanished shard AND the errored shard: incomplete.
+	arts, keys, summary, err := buildMergeArtifacts(res, "run-c", 3, accountBarrier{})
+	if err != nil {
+		t.Fatalf("buildMergeArtifacts: %v", err)
+	}
+	if summary.Complete {
+		t.Fatalf("precondition: summary must be incomplete")
+	}
+	// Parse the CBOM and assert the coverage properties by NAME->value rather than
+	// substring-matching "true" anywhere (other properties, e.g. cryptamap:synthetic
+	// or cryptamap:pqcHybrid, also emit "true" and would mask an incomplete=false
+	// regression). This pins the loud headline to the exact cryptamap:incomplete key.
+	var bom struct {
+		Metadata struct {
+			Properties []struct {
+				Name  string `json:"name"`
+				Value string `json:"value"`
+			} `json:"properties"`
+		} `json:"metadata"`
+	}
+	if err := json.Unmarshal(arts[keys.CBOM], &bom); err != nil {
+		t.Fatalf("unmarshal merged CBOM: %v", err)
+	}
+	props := map[string]string{}
+	for _, p := range bom.Metadata.Properties {
+		props[p.Name] = p.Value
+	}
+	if props["cryptamap:incomplete"] != "true" {
+		t.Errorf("cryptamap:incomplete = %q, want \"true\" (loud headline for a decimated scan)", props["cryptamap:incomplete"])
+	}
+	// observed=2, expected=3 -> missing 1. failedShards counts STRUCTURED rows: the
+	// errored shard (1) PLUS the synthetic vanished-gap row for the missing shard
+	// (1) = 2, matching buildMergeSummary's loud-incomplete report.
+	for name, want := range map[string]string{
+		"cryptamap:expectedShards": "3",
+		"cryptamap:observedShards": "2",
+		"cryptamap:missingShards":  "1",
+		"cryptamap:failedShards":   "2",
+	} {
+		if props[name] != want {
+			t.Errorf("%s = %q, want %q", name, props[name], want)
+		}
+	}
+}
+
 // TestSummarizePostureCounts + TestHeadlineCallouts lock the /summary posture
 // rollup: per-posture bucketing mirrors the dashboard, and the two honest headline
 // callouts replace the retired single headline percentage — quantumVulnerablePct =
@@ -667,5 +815,67 @@ func TestHeadlineCallouts(t *testing.T) {
 	// Hybrid must NEVER count as end-to-end PQC: all-hybrid org -> 0%.
 	if got := pqcEndToEndPct(mergeSummaryPosture{PQCHybrid: 4}); got != 0 {
 		t.Errorf("pqcEndToEndPct(all hybrid) = %d, want 0", got)
+	}
+}
+
+// TestMergeRegionDiscoveryBarrier proves the region-discovery completion barrier
+// (docs/SCALING.md §6 Bug B): an account whose enabled-region enumeration failed
+// in the seed (AssumeRole/DescribeRegions) was scanned over FALLBACK_REGIONS
+// only, so its true region coverage is UNKNOWN — even when every fallback shard
+// landed cleanly and the shard count reconciles. The merge must flag the run
+// Incomplete=true with a named FailedShards row (region "*"), never a clean
+// "complete" org report after a discovery failure.
+func TestMergeRegionDiscoveryBarrier(t *testing.T) {
+	res := mergeRawShards([]models.ScanResult{
+		mkRawShard("111111111111", "us-east-1", "arn:aws:s3:::a", models.SeverityInformational),
+		mkRawShard("222222222222", "us-east-1", "arn:aws:s3:::b", models.SeverityInformational),
+	})
+	keys := mergedKeys("run-rd")
+
+	// Shard count reconciles (expected=2, observed=2) and no per-account object is
+	// missing: the ONLY incompleteness signal is the seed's region-discovery
+	// failure for account 222222222222.
+	barrier := accountBarrier{
+		expectedAccounts:      2,
+		regionDiscoveryFailed: []string{"222222222222"},
+	}
+	s := buildMergeSummary(res, "run-rd", keys, 2, barrier)
+	if s.MissingShards != 0 {
+		t.Fatalf("precondition: MissingShards=%d, want 0 (count reconciles in this case)", s.MissingShards)
+	}
+	if s.Complete || !s.Incomplete {
+		t.Errorf("region-discovery failure must force complete=false/incomplete=true, got complete=%v incomplete=%v",
+			s.Complete, s.Incomplete)
+	}
+	if len(s.FailedShards) != 1 {
+		t.Fatalf("FailedShards: got=%+v want exactly 1 discovery-failure row", s.FailedShards)
+	}
+	if fs := s.FailedShards[0]; fs.AccountID != "222222222222" || fs.Region != "*" ||
+		!strings.Contains(fs.Reason, "region discovery") {
+		t.Errorf("FailedShards[0]: got=%+v want account=222222222222 region=* reason~region discovery", fs)
+	}
+
+	// Clean run (no discovery failures) with the same shape stays complete.
+	clean := buildMergeSummary(res, "run-rd", keys, 2, accountBarrier{expectedAccounts: 2})
+	if !clean.Complete || clean.Incomplete || len(clean.FailedShards) != 0 {
+		t.Errorf("clean: complete=%v incomplete=%v failed=%+v, want true/false/empty",
+			clean.Complete, clean.Incomplete, clean.FailedShards)
+	}
+}
+
+// TestLambdaEventRegionDiscoveryFieldParses locks the wire contract for the
+// seed -> BuildOrgCbom regionDiscoveryFailedAccounts pass-through: the CDK
+// payload key must unmarshal into LambdaEvent.RegionDiscoveryFailedAccounts.
+func TestLambdaEventRegionDiscoveryFieldParses(t *testing.T) {
+	evt, err := parseLambdaEvent([]byte(`{"mode":"lambda","merge":true,"runId":"run-x",
+		"expectedShards":3,"regionDiscoveryFailedAccounts":["111111111111","222222222222"]}`))
+	if err != nil {
+		t.Fatalf("parseLambdaEvent: %v", err)
+	}
+	if len(evt.RegionDiscoveryFailedAccounts) != 2 ||
+		evt.RegionDiscoveryFailedAccounts[0] != "111111111111" ||
+		evt.RegionDiscoveryFailedAccounts[1] != "222222222222" {
+		t.Errorf("RegionDiscoveryFailedAccounts: got=%+v want the two seed-reported accounts",
+			evt.RegionDiscoveryFailedAccounts)
 	}
 }

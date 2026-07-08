@@ -457,9 +457,17 @@ func TestE2EPipeline_PQCCExcel(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read Baseline Inventory sheet: %v", err)
 	}
-	// header + one row per finding.
-	if want := 1 + len(scan.Findings); len(rows) != want {
-		t.Errorf("Baseline Inventory has %d rows, want %d (header + one per finding)", len(rows), want)
+	// header + one row per finding + one row per inventory-only (symmetric-only)
+	// asset: a PQCC *inventory* workbook must list the quantum-resistant-at-rest
+	// assets too, or the sheet silently under-reports the asset population.
+	inventoryOnly := 0
+	for _, a := range scan.Assets {
+		if a.Properties != nil && a.Properties["posture"] == string(models.PostureSymmetricOnly) {
+			inventoryOnly++
+		}
+	}
+	if want := 1 + len(scan.Findings) + inventoryOnly; len(rows) != want {
+		t.Errorf("Baseline Inventory has %d rows, want %d (header + one per finding + %d inventory-only)", len(rows), want, inventoryOnly)
 	}
 
 	// Find the row whose "Asset/System Short Name/ID" column (B, index 1) is our
@@ -488,8 +496,9 @@ func TestE2EPipeline_PQCCExcel(t *testing.T) {
 	// Also assert via the raw cell-value API that the literal stored value of the
 	// injected cell starts with a quote (defense in depth against GetRows
 	// normalization).
-	// The injected finding is the last one, so its row is the last data row.
-	lastRow := strconv.Itoa(len(rows)) // 1-based; header is row 1, so last finding is row len(rows)
+	// The injected finding is the last FINDING; finding rows come before the
+	// inventory-only rows, so it sits at row 1 (header) + len(Findings).
+	lastRow := strconv.Itoa(1 + len(scan.Findings))
 	v, err := f.GetCellValue("Baseline Inventory", "B"+lastRow)
 	if err != nil {
 		t.Fatalf("GetCellValue B%s: %v", lastRow, err)

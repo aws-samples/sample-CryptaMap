@@ -16,7 +16,7 @@ interface Props {
   scanTimestamp?: string;
 }
 
-type Freshness = { color: 'green' | 'blue' | 'grey'; label: string; stale: boolean };
+type Freshness = { color: 'green' | 'blue' | 'red'; label: string; stale: boolean };
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -37,7 +37,9 @@ function freshness(p: KnowledgeProvenance, scanTimestamp?: string): Freshness {
   if (ageDays === null) return { color: 'blue', label: 'Knowledge', stale: false };
   if (ageDays <= 180) return { color: 'green', label: 'Knowledge fresh', stale: false };
   if (ageDays <= 365) return { color: 'blue', label: 'Knowledge aging', stale: false };
-  return { color: 'grey', label: 'Knowledge stale', stale: true };
+  // 'red' (not neutral grey) — stale is the WORST state and must not read as
+  // merely informational.
+  return { color: 'red', label: 'Knowledge stale', stale: true };
 }
 
 // KnowledgeFreshnessBadge surfaces HOW FRESH the PQC knowledge was at scan time
@@ -94,8 +96,10 @@ export default function KnowledgeFreshnessBadge({ provenance: p, scanTimestamp }
         </Box>
       }
     >
+      {/* The computed freshness label is IN the text, not colour-only (WCAG 1.4.1):
+          an auditor must literally read the word "stale" for year-old knowledge. */}
       <Badge color={f.color}>
-        {sourceLabel} · facts as of {p.minAsOf || '—'}
+        {f.label} · {sourceLabel} · facts as of {p.minAsOf || '—'}
       </Badge>
     </InfoPopover>
   );

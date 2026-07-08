@@ -221,6 +221,14 @@ func ValidateASFFFinding(f ASFFFinding) error {
 		}
 	}
 
+	// --- Remediation.Recommendation.Text: <= 512 chars when present (API
+	// Reference, Recommendation data type; Url has no documented length cap) ---
+	if txt := f.Remediation.Recommendation.Text; txt != "" {
+		if n := len([]rune(txt)); n > asffMaxRecommendation {
+			add("Remediation.Recommendation.Text", fmt.Sprintf("must be <= %d chars (got %d)", asffMaxRecommendation, n), n)
+		}
+	}
+
 	// --- Optional enum-bearing fields: validate only when present ---
 	if f.Compliance != nil && f.Compliance.Status != "" && !asffComplianceStatuses[f.Compliance.Status] {
 		add("Compliance.Status", "must be one of PASSED|WARNING|FAILED|NOT_AVAILABLE", f.Compliance.Status)

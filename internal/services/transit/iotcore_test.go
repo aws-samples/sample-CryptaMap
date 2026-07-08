@@ -280,6 +280,17 @@ func TestIoTCoreClassificationHonesty(t *testing.T) {
 	if noPol.Properties["securityPolicy"] != "" {
 		t.Errorf("dc-no-policy: an unobserved (doc-default) config must NOT record an observed securityPolicy, got %q", noPol.Properties["securityPolicy"])
 	}
+	// The doc-default "1.3" applies only to NEW domain configurations and is
+	// overridable for existing ones, so it must NOT be written as TLSMinVersion:
+	// a downstream "min TLS >= 1.3" check would consume a fabricated floor as
+	// fact. Only an OBSERVED security policy may set the floor.
+	if pp := noPol.CryptoProps.ProtocolProperties; pp == nil || pp.TLSMinVersion != "" {
+		got := ""
+		if pp != nil {
+			got = pp.TLSMinVersion
+		}
+		t.Errorf("dc-no-policy: TLSMinVersion=%q, want \"\" (the doc-default 1.3 is not an observed floor and must not be stamped as one)", got)
+	}
 
 	// Thing stays inventory-only: no posture/TLS classification fabricated.
 	thing, ok := iotcoreAssetByID(assets, "thing-1")

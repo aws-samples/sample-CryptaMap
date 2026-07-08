@@ -72,12 +72,16 @@ func (s DocumentDBElasticScanner) scan(ctx context.Context, client docDBElasticA
 					return models.CryptoAsset{}, false
 				}
 				arn := *c.ClusterArn
-				// GetCluster carries the per-cluster KmsKeyId; an empty key, nil
-				// cluster, or a describe failure all fall back to the AWS-owned
-				// default key (posture is unchanged either way).
+				// GetCluster carries the per-cluster KmsKeyId. A SUCCESSFUL describe
+				// with an empty key is the AWS-owned default; a describe FAILURE
+				// proves nothing about custody (the cluster may use a customer CMK we
+				// could not read), so it is recorded as honestly undetermined rather
+				// than a fabricated AWS-owned verdict. Posture is unchanged either way.
 				kmsKey := ""
+				getErr := false
 				if d, derr := client.GetCluster(ctx, &docdbelastic.GetClusterInput{ClusterArn: c.ClusterArn}); derr != nil {
 					fmt.Fprintf(os.Stderr, "docdbelastic GetCluster %s: %v\n", arn, derr)
+					getErr = true
 				} else if d.Cluster != nil && d.Cluster.KmsKeyId != nil {
 					kmsKey = *d.Cluster.KmsKeyId
 				}
@@ -85,7 +89,7 @@ func (s DocumentDBElasticScanner) scan(ctx context.Context, client docDBElasticA
 				if c.ClusterName != nil {
 					clusterName = *c.ClusterName
 				}
-				return classifyDocumentDBElasticCluster(accountID, region, arn, clusterName, kmsKey), true
+				return classifyDocumentDBElasticCluster(accountID, region, arn, clusterName, kmsKey, getErr), true
 			})
 		assets = append(assets, page...)
 		if out.NextToken == nil || *out.NextToken == "" {
@@ -98,17 +102,29 @@ func (s DocumentDBElasticScanner) scan(ctx context.Context, client docDBElasticA
 
 // classifyDocumentDBElasticCluster builds the at-rest asset for a single elastic
 // cluster from already-resolved fields. Posture is unconditionally SymmetricOnly:
-// elastic clusters are always KMS-encrypted at rest with no opt-out, so a
-// describe failure (empty kmsKeyId) NEVER downgrades posture — it only falls the
-// recorded key back to the AWS-owned default. A non-empty kmsKeyId is recorded
+// elastic clusters are always KMS-encrypted at rest with no opt-out, so neither a
+// missing key nor a describe failure ever downgrades posture.
+//
+// Key custody honesty: an empty kmsKeyId from a SUCCESSFUL GetCluster is the
+// AWS-owned default key. When getErr is true the describe FAILED, so custody was
+// never observed — asserting AWS_OWNED_KMS_KEY there would fabricate a "no
+// customer CMK" verdict (the cluster may use a customer key the scanner role
+// cannot read); custody is recorded as honestly undetermined instead
+// (kmsKeyId=UNRESOLVED, keyTier=unknown). A non-empty kmsKeyId is recorded
 // verbatim as the backing key.
-func classifyDocumentDBElasticCluster(accountID, region, arn, clusterName, kmsKeyId string) models.CryptoAsset {
-	if kmsKeyId == "" {
-		kmsKeyId = "AWS_OWNED_KMS_KEY"
-	}
+func classifyDocumentDBElasticCluster(accountID, region, arn, clusterName, kmsKeyId string, getErr bool) models.CryptoAsset {
 	a := services.NewAsset("documentdb_elastic", models.CategoryDataAtRest, accountID, region, arn, "AWS::DocDBElastic::Cluster", services.AESAtRest())
 	services.PostureProperty(&a, models.PostureSymmetricOnly)
-	a.Properties["kmsKeyId"] = kmsKeyId
+	switch {
+	case kmsKeyId != "":
+		a.Properties["kmsKeyId"] = kmsKeyId
+	case getErr:
+		a.Properties["kmsKeyId"] = "UNRESOLVED"
+		a.Properties["keyTier"] = "unknown"
+		a.Properties["note"] = "GetCluster failed; the cluster is still KMS-encrypted at rest (no opt-out), but key custody (AWS-owned vs customer CMK) could not be read."
+	default:
+		a.Properties["kmsKeyId"] = "AWS_OWNED_KMS_KEY"
+	}
 	if clusterName != "" {
 		a.Properties["clusterName"] = clusterName
 	}

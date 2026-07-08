@@ -57,13 +57,18 @@ func (s MSKTransitScanner) scan(ctx context.Context, client mskKafkaAPI, account
 				id = *c.ClusterArn
 			}
 			// Defaults preserved for the Serverless cluster type and any nil
-			// path (backward compatible).
+			// path (backward compatible). Serverless is documented TLS-only, so
+			// the classical default is kept — but it is a doc-fact, not an
+			// observed negotiation, so the nil path is stamped below rather than
+			// shipped with no provenance at all.
 			posture := models.PostureNonPQCClassical
-			props := services.TLSProtocolProps("1.2", "AWS-managed")
+			props := services.TLSProtocolProps("", "AWS-managed")
+			nilPath := true
 			inClusterStr := ""
 			clientBroker := ""
 			enforced := ""
 			if c.Provisioned != nil && c.Provisioned.EncryptionInfo != nil && c.Provisioned.EncryptionInfo.EncryptionInTransit != nil {
+				nilPath = false
 				eit := c.Provisioned.EncryptionInfo.EncryptionInTransit
 				clientBroker = string(eit.ClientBroker)
 				// Deepen: route both ClientBroker and the broker-to-broker
@@ -85,6 +90,12 @@ func (s MSKTransitScanner) scan(ctx context.Context, client mskKafkaAPI, account
 				// The TLS/TLS_PLAINTEXT/PLAINTEXT enum-to-behavior mapping is a
 				// universal AWS guarantee, not an observed cipher negotiation.
 				services.StampDocFactKeyed(&a, "transit/msk_transit/msk-encryption")
+			} else if nilPath {
+				// Serverless / nil-EncryptionInfo path: the classical-TLS default
+				// rests on the documented MSK-Serverless-TLS-only guarantee, not any
+				// read field — stamp its own distinct provenance so this verdict is
+				// not the only unattributed fact in the set.
+				services.StampDocFactKeyed(&a, "transit/msk_transit/serverless-tls-only")
 			}
 			assets = append(assets, a)
 		}

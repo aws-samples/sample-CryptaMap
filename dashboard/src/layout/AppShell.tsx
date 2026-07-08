@@ -76,6 +76,9 @@ export default function AppShell({ children }: Props) {
   //   ''       → unknown (CBOM had no mode); fall back to the transport flag
   const [dataMode, setDataMode] = useState<string | null>(null);
   const [demo, setDemo] = useState<boolean | null>(null);
+  // True when the deployed (non-mock) transport returned NO CBOM at all: the chip
+  // must not assert a positive "Live scan" verdict when provenance is unknown.
+  const [loadFailed, setLoadFailed] = useState(false);
   const [bannerDismissed, setBannerDismissed] = useState(false);
   useEffect(() => {
     let cancelled = false;
@@ -85,20 +88,26 @@ export default function AppShell({ children }: Props) {
       const cbom = await fetchLatestCBOM().catch(() => null);
       if (cancelled) return;
       setDataMode(scanProvenance(cbom)?.mode ?? '');
+      setLoadFailed(!transportMock && cbom === null);
       setDemo(isDemoData(cbom, transportMock));
     })();
     return () => { cancelled = true; };
   }, []);
 
-  // Three-state authenticity chip text/icon, driven by the data's own mode.
+  // Authenticity chip text/icon, driven by the data's own mode. `null` while
+  // loading (the utility is omitted entirely — an empty focusable button is
+  // screen-reader noise, WCAG 4.1.2). A failed live fetch is an honest
+  // "Data unavailable" warning, never a green "Live scan" claimed without evidence.
   const chip =
     demo === null
-      ? { text: '', icon: 'status-info' as const }
-      : demo
-        ? { text: 'Demo data', icon: 'status-warning' as const }
-        : dataMode === 'merged'
-          ? { text: 'Live org scan', icon: 'status-positive' as const }
-          : { text: 'Live scan', icon: 'status-positive' as const };
+      ? null
+      : loadFailed
+        ? { text: 'Data unavailable', icon: 'status-warning' as const }
+        : demo
+          ? { text: 'Demo data', icon: 'status-warning' as const }
+          : dataMode === 'merged'
+            ? { text: 'Live org scan', icon: 'status-positive' as const }
+            : { text: 'Live scan', icon: 'status-positive' as const };
 
   // SplitPanel state owned here so any page can push per-asset detail into the
   // AppLayout splitPanel slot via the SplitPanelContext. We stamp the route the
@@ -164,11 +173,15 @@ export default function AppShell({ children }: Props) {
             },
           }}
           utilities={[
-            {
-              type: 'button',
-              text: chip.text,
-              iconName: chip.icon,
-            },
+            ...(chip
+              ? [
+                  {
+                    type: 'button' as const,
+                    text: chip.text,
+                    iconName: chip.icon,
+                  },
+                ]
+              : []),
             { type: 'button', text: 'v1.0.0' },
           ]}
         />
@@ -214,7 +227,7 @@ export default function AppShell({ children }: Props) {
                   onDismiss: () => setBannerDismissed(true),
                   header: 'Demo data — not a real AWS scan',
                   content:
-                    'This dashboard is showing synthetic sample data for demonstration. Findings, accounts, and postures are illustrative only. To see your own environment, run a CryptaMap scan and open it with `cryptamap serve ./out`.',
+                    'This dashboard is showing synthetic sample data for demonstration. Findings, accounts, and postures are illustrative only. To see your own environment, run a CryptaMap scan and open it with `cryptamap serve --dir ./out`.',
                   id: 'demo-data-warning',
                 },
               ]}

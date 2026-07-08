@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strconv"
+	"strings"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/neptune"
@@ -66,6 +68,15 @@ func (s NeptuneTransitScanner) scan(ctx context.Context, client neptuneTransitAP
 			if c.DBClusterIdentifier == nil {
 				continue
 			}
+			// DescribeDBClusters hits the SHARED RDS control plane, which returns
+			// RDS/Aurora/Neptune/DocumentDB clusters alike. Only Neptune clusters
+			// may receive Neptune's transit verdict — stamping "SSL/HTTPS-only" on
+			// a foreign (e.g. Aurora) cluster would be a fabricated all-clear. A
+			// nil Engine is unprovable, so it is skipped too (the engine-specific
+			// scanner for that cluster covers it).
+			if c.Engine == nil || !strings.EqualFold(*c.Engine, "neptune") {
+				continue
+			}
 			// Join the CA-cert id discovered from the cluster's instances. The
 			// CA id encodes the leaf cert key family; the negotiated TLS version
 			// is not exposed by any API, so it is left unknown.
@@ -73,19 +84,34 @@ func (s NeptuneTransitScanner) scan(ctx context.Context, client neptuneTransitAP
 			sigAlgo, keyBits := dbCertKeyFamily(caID)
 			props := services.TLSProtocolPropsDetailed("", "neptune-tls", "", sigAlgo, keyBits, false)
 			a := services.NewAsset("neptune_transit", models.CategoryDataInTransit, accountID, region, *c.DBClusterIdentifier, "AWS::Neptune::DBCluster", props)
-			services.PostureProperty(&a, models.PostureNonPQCClassical)
+			a.Properties["engine"] = *c.Engine
 			if caID != "" {
 				a.Properties["ca_identifier"] = caID
 			}
-			// Neptune only allows SSL connections through HTTPS to any instance or
-			// cluster endpoint (plaintext is not accepted), and engine version
-			// 1.0.4.0+ only supports HTTPS requests. That TLS-enforcement guarantee
-			// is the PRIMARY basis for the transit verdict and is not exposed by any
-			// per-resource API, so it is stamped as an aws-doc fact LAST (the
-			// observed CA-cert key family above is a secondary detail and must not
-			// clobber the doc-fact source). The cipher family is classical
-			// (non-PQC), so the PostureNonPQCClassical above remains correct.
-			services.StampDocFactKeyed(&a, "transit/neptune_transit/ssl-https-only")
+			engineVersion := ""
+			if c.EngineVersion != nil {
+				engineVersion = *c.EngineVersion
+				a.Properties["engine_version"] = engineVersion
+			}
+			if neptuneVersionAtLeast(engineVersion, "1.0.4.0") {
+				// Engine version 1.0.4.0+ only supports HTTPS requests to any
+				// instance or cluster endpoint (plaintext is rejected). That
+				// TLS-enforcement guarantee is the PRIMARY basis for the transit
+				// verdict and is not exposed by any per-resource API, so it is
+				// stamped as an aws-doc fact LAST (the observed CA-cert key family
+				// above is a secondary detail and must not clobber the doc-fact
+				// source). The cipher family is classical (non-PQC), so
+				// PostureNonPQCClassical is correct.
+				services.PostureProperty(&a, models.PostureNonPQCClassical)
+				services.StampDocFactKeyed(&a, "transit/neptune_transit/ssl-https-only")
+			} else {
+				// Engine versions before 1.0.4.0 also accepted plaintext HTTP, and
+				// a missing/unparseable EngineVersion leaves the HTTPS-only
+				// guarantee unprovable. Report Unknown rather than fabricating a
+				// TLS-enforced classical verdict.
+				services.PostureProperty(&a, models.PostureUnknown)
+				a.Properties["note"] = "Neptune HTTPS-only enforcement could not be proven: the doc-fact guarantee applies to engine version 1.0.4.0+ only, and this cluster's EngineVersion (" + engineVersion + ") is below it or unreadable; pre-1.0.4.0 engines also accepted plaintext HTTP."
+			}
 			assets = append(assets, a)
 		}
 		if out.Marker == nil || *out.Marker == "" {
@@ -94,6 +120,41 @@ func (s NeptuneTransitScanner) scan(ctx context.Context, client neptuneTransitAP
 		marker = out.Marker
 	}
 	return assets, nil
+}
+
+// neptuneVersionAtLeast reports whether a dotted-numeric Neptune engine version
+// (e.g. "1.0.5.1") is >= the given minimum (e.g. "1.0.4.0"). It compares
+// numeric segments left-to-right, treating missing trailing segments as 0. Any
+// non-numeric segment or an empty version returns false — an unparseable
+// version must never be treated as satisfying the guarantee.
+func neptuneVersionAtLeast(version, minimum string) bool {
+	if strings.TrimSpace(version) == "" {
+		return false
+	}
+	vParts := strings.Split(strings.TrimSpace(version), ".")
+	mParts := strings.Split(minimum, ".")
+	n := len(vParts)
+	if len(mParts) > n {
+		n = len(mParts)
+	}
+	for i := 0; i < n; i++ {
+		v, m := 0, 0
+		var err error
+		if i < len(vParts) {
+			if v, err = strconv.Atoi(vParts[i]); err != nil {
+				return false
+			}
+		}
+		if i < len(mParts) {
+			if m, err = strconv.Atoi(mParts[i]); err != nil {
+				return false
+			}
+		}
+		if v != m {
+			return v > m
+		}
+	}
+	return true
 }
 
 // neptuneClusterCACerts paginates DescribeDBInstances and returns a map from
