@@ -85,7 +85,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/timestreamwrite v1.35.25
 	github.com/aws/aws-sdk-go-v2/service/transfer v1.72.2
 	github.com/aws/aws-sdk-go-v2/service/vpclattice v1.22.2
-	github.com/aws/aws-sdk-go-v2/service/workspaces v1.68.3
+	github.com/aws/aws-sdk-go-v2/service/workspaces v1.71.0
 	github.com/aws/aws-sdk-go-v2/service/workspacesweb v1.40.7
 	github.com/aws/aws-sdk-go-v2/service/xray v1.37.3
 	github.com/aws/smithy-go v1.27.3

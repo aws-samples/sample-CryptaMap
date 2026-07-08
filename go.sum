@@ -188,8 +188,8 @@ github.com/aws/aws-sdk-go-v2/service/transfer v1.72.2 h1:+QellvYln/9mjMQAwxyvQG3
 github.com/aws/aws-sdk-go-v2/service/transfer v1.72.2/go.mod h1:bmgZaPW4xYibdNIVq/vYQwTCq73K+sS02BuFR9tHsiw=
 github.com/aws/aws-sdk-go-v2/service/vpclattice v1.22.2 h1:q9xVCezxBqFAv/sJakd63MZ564MxOY8CDfWuiih9awM=
 github.com/aws/aws-sdk-go-v2/service/vpclattice v1.22.2/go.mod h1:iMZnTuSYmfTgpqnzEni1JqeO0Ar/ZItPumptLBMb8/A=
-github.com/aws/aws-sdk-go-v2/service/workspaces v1.68.3 h1:VdduyWoOF4l/GUaNfSIFEJKMTwis943dwoT73SR5+Bg=
-github.com/aws/aws-sdk-go-v2/service/workspaces v1.68.3/go.mod h1:CuyzqbKdY8lN//0RPBb7OkQ9YRFYBFpK5SQjlANpWJI=
+github.com/aws/aws-sdk-go-v2/service/workspaces v1.71.0 h1:av8PQ1/+zPgRpQlKJX5Q8nMfSAoRcSPrktcH4TkTfww=
+github.com/aws/aws-sdk-go-v2/service/workspaces v1.71.0/go.mod h1:IGhs+6IIUtM6Lc5+LF2rTSZeQb4szMDXKW7t4t1chUM=
 github.com/aws/aws-sdk-go-v2/service/workspacesweb v1.40.7 h1:vxI8SJwwF9n0oB2fSTZCIqjYGhCeD95CrayQeHuSiG8=
 github.com/aws/aws-sdk-go-v2/service/workspacesweb v1.40.7/go.mod h1:ywjfHG0obHdo3cIOpPrIju2/M5oMnpD8HzwFMkAfToU=
 github.com/aws/aws-sdk-go-v2/service/xray v1.37.3 h1:ozG9CuAEB1zS7hBI7BYWYvr798LD7G+Tiw1ccS5sAms=
