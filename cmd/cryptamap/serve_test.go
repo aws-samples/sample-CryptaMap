@@ -26,7 +26,8 @@ func TestServeMuxLocalDataContract(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	srv := httptest.NewServer(newServeMux(cbomPath, roadmapPath, nil))
+	mux, _ := newServeMux(cbomPath, roadmapPath, nil)
+	srv := httptest.NewServer(mux)
 	defer srv.Close()
 
 	cases := []struct {
@@ -48,7 +49,8 @@ func TestServeMuxLocalDataContract(t *testing.T) {
 // TestServeMuxSPAFallback verifies an unknown deep-link path returns the
 // embedded index.html (200) so BrowserRouter routes do not 404.
 func TestServeMuxSPAFallback(t *testing.T) {
-	srv := httptest.NewServer(newServeMux("/dev/null", "/dev/null", nil))
+	mux, _ := newServeMux("/dev/null", "/dev/null", nil)
+	srv := httptest.NewServer(mux)
 	defer srv.Close()
 
 	resp, err := http.Get(srv.URL + "/roadmap/some/deep/link")
@@ -176,7 +178,8 @@ func TestServeMuxArtifactRoutes(t *testing.T) {
 	}
 
 	arts := findArtifacts(dir)
-	srv := httptest.NewServer(newServeMux("/dev/null", "/dev/null", arts))
+	mux, _ := newServeMux("/dev/null", "/dev/null", arts)
+	srv := httptest.NewServer(mux)
 	defer srv.Close()
 
 	// Manifest must be a one-element array describing the CBOM at its route.
@@ -296,7 +299,8 @@ func TestScanTimestampFromName(t *testing.T) {
 // at /artifacts/manifest.json instead of falling into the SPA fallback and
 // returning 200 text/html index.html (a JSON parse error masked by a success).
 func TestDemoMuxManifestJSON(t *testing.T) {
-	srv := httptest.NewServer(newDemoMux())
+	mux, _ := newDemoMux()
+	srv := httptest.NewServer(mux)
 	defer srv.Close()
 
 	resp, err := http.Get(srv.URL + "/artifacts/manifest.json")

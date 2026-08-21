@@ -9,7 +9,9 @@ import Flashbar from '@cloudscape-design/components/flashbar';
 import { SplitPanelContext } from './SplitPanelContext';
 import type { SplitPanelState } from './SplitPanelContext';
 import { getRuntimeConfig, fetchLatestCBOM } from '../services/api';
+import { fetchAgentStatus } from '../services/agentApi';
 import { scanProvenance, isDemoData } from '../hooks/useScanData';
+import AgentChatPanel from '../components/AgentChatPanel';
 
 interface Props {
   children: React.ReactNode;
@@ -90,6 +92,21 @@ export default function AppShell({ children }: Props) {
       setDataMode(scanProvenance(cbom)?.mode ?? '');
       setLoadFailed(!transportMock && cbom === null);
       setDemo(isDemoData(cbom, transportMock));
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
+  // AI Agent: proactively check whether the backend is configured
+  // (GEMINI_API_KEY set — see cmd/cryptamap/serve.go mountAgentRoutes) so the
+  // "Ask AI" utility can be disabled with an explanation up front, rather than
+  // the user opening an empty chat panel only to hit an error on first send.
+  const [agentEnabled, setAgentEnabled] = useState(false);
+  const [chatOpen, setChatOpen] = useState(false);
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const status = await fetchAgentStatus();
+      if (!cancelled) setAgentEnabled(status.enabled);
     })();
     return () => { cancelled = true; };
   }, []);
@@ -182,6 +199,12 @@ export default function AppShell({ children }: Props) {
                   },
                 ]
               : []),
+            {
+              type: 'button' as const,
+              text: 'Ask AI',
+              iconName: 'gen-ai',
+              onClick: () => setChatOpen(true),
+            },
             { type: 'button', text: 'v1.0.0' },
           ]}
         />
@@ -236,6 +259,7 @@ export default function AppShell({ children }: Props) {
         }
         content={children}
       />
+      <AgentChatPanel open={chatOpen} onClose={() => setChatOpen(false)} agentEnabled={agentEnabled} />
     </SplitPanelContext.Provider>
   );
 }

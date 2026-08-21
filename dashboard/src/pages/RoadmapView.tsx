@@ -9,6 +9,7 @@ import Spinner from '@cloudscape-design/components/spinner';
 import Alert from '@cloudscape-design/components/alert';
 import ExpandableSection from '@cloudscape-design/components/expandable-section';
 import Badge from '@cloudscape-design/components/badge';
+import Button from '@cloudscape-design/components/button';
 import KeyValuePairs from '@cloudscape-design/components/key-value-pairs';
 import { useScanData } from '../hooks/useScanData';
 import { useRoadmap, splitTiers, quickWinCount } from '../hooks/useRoadmap';
@@ -21,6 +22,14 @@ import AssetDetailPanel from '../components/AssetDetailPanel';
 import { useSplitPanel } from '../layout/SplitPanelContext';
 
 const SELECT_PARAM = 'item';
+// SERVICE_PARAM scopes the three tier tables + summary counts to one raw
+// scanner service id (e.g. ?service=kms_spec). It is additive: the header
+// (asOf/generatedFrom) and the byService/byAccount rollups below always stay
+// on the FULL roadmap, only the tier tables and "Where to focus" counts
+// narrow. This is what makes the AI Agent's "take me to the roadmap for KMS"
+// action a real, verifiable filter rather than just a bare page navigation
+// (see internal/agent/tools.go ui_view_roadmap + lib/agentActions.ts).
+const SERVICE_PARAM = 'service';
 
 // A tiny three-segment proportion bar (red / blue / green) sized by the three
 // tier counts. Pure CSS flex, no chart dependency. Segments with a zero count
@@ -84,9 +93,29 @@ export default function RoadmapView() {
     return m;
   }, [rows]);
 
-  const { actNow, planWatch, noAction } = useMemo(() => splitTiers(roadmap), [roadmap]);
-  const quickWins = useMemo(() => quickWinCount(roadmap), [roadmap]);
+  const serviceFilter = searchParams.get(SERVICE_PARAM);
+  // Scoped view: only the item list narrows. asOf/generatedFrom (header) and
+  // byService/byAccount (RoadmapRollups) intentionally stay on the unfiltered
+  // `roadmap` so the rollups keep showing the whole scan even while the tier
+  // tables above are focused on one service.
+  const filteredRoadmap = useMemo(() => {
+    if (!roadmap || !serviceFilter) return roadmap;
+    return { ...roadmap, items: roadmap.items.filter((i) => i.service === serviceFilter) };
+  }, [roadmap, serviceFilter]);
+  const serviceFilterLabel = useMemo(() => {
+    if (!serviceFilter) return null;
+    return filteredRoadmap?.items[0]?.displayName ?? serviceFilter;
+  }, [serviceFilter, filteredRoadmap]);
+
+  const { actNow, planWatch, noAction } = useMemo(() => splitTiers(filteredRoadmap), [filteredRoadmap]);
+  const quickWins = useMemo(() => quickWinCount(filteredRoadmap), [filteredRoadmap]);
   const total = actNow.length + planWatch.length + noAction.length;
+
+  const clearServiceFilter = () => {
+    const next = new URLSearchParams(searchParams);
+    next.delete(SERVICE_PARAM);
+    setSearchParams(next, { replace: true });
+  };
 
   const selectedBomRef = searchParams.get(SELECT_PARAM);
   const selectedItem = useMemo<RoadmapItem | null>(() => {
@@ -156,6 +185,19 @@ export default function RoadmapView() {
       }
     >
       <SpaceBetween size="l">
+        {serviceFilter && (
+          <Alert
+            type="info"
+            header={`Filtered to service: ${serviceFilterLabel}`}
+            action={
+              <Button variant="inline-link" onClick={clearServiceFilter}>
+                Clear filter
+              </Button>
+            }
+          >
+            Showing only roadmap items for this service. The rollups below still cover the full scan.
+          </Alert>
+        )}
         {/* 1) SUMMARY BAND — plain headline + tier counts + proportion bar. */}
         <Container
           header={

@@ -195,6 +195,24 @@ export default function AssetsView() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [propertyFilterProps.query]);
 
+  // Re-apply the PropertyFilter query whenever ?q= changes to something that
+  // differs from what's currently applied — e.g. the AI Agent navigating here
+  // via navigate('/assets?q=...') (dashboard/src/lib/agentActions.ts) while
+  // the user is ALREADY on this page. useCollection's defaultQuery is only
+  // read once at mount (an uncontrolled initial value), so without this an
+  // agent-driven filter would update the URL but leave the visible table
+  // unfiltered until a full remount. Depending on the raw param string (not
+  // the effect above's propertyFilterProps.query) means this only fires on a
+  // genuine external change and settles after at most one extra round trip.
+  const urlQueryParam = searchParams.get(QUERY_PARAM);
+  useEffect(() => {
+    const urlQuery = parseQueryParam(urlQueryParam);
+    if (JSON.stringify(urlQuery) !== JSON.stringify(propertyFilterProps.query)) {
+      propertyFilterProps.onChange({ detail: urlQuery });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [urlQueryParam]);
+
   // Track the selected asset and mirror it to the URL (?asset=<bom-ref>).
   const selectedBomRef = searchParams.get(SELECT_PARAM);
   const selectedItem = useMemo(

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"log"
 	"net"
 	"net/http"
 	"os"
@@ -14,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/aws-samples/cryptamap/internal/agent"
 	"github.com/spf13/cobra"
 )
 
@@ -125,6 +127,12 @@ func runServe(cmd *cobra.Command, f serveFlags) error {
 	var mux *http.ServeMux
 	var cbomPath, roadmapPath string
 	var arts []artifact
+	// agentEnabled reflects whether mountAgentRoutes ACTUALLY mounted the live
+	// chat handlers (GEMINI_API_KEY set AND the corpus loaded), not just
+	// whether the env var is set — see the startup banner below, which must
+	// never claim "enabled" when a corpus load failure silently fell back to
+	// DisabledHandler.
+	var agentEnabled bool
 
 	if f.demo {
 		// DEMO mode: serve the bundled SYNTHETIC sample data embedded in the
@@ -134,7 +142,7 @@ func runServe(cmd *cobra.Command, f serveFlags) error {
 		if _, err := fs.Stat(webDist, "webdist/mock/org-cbom.json"); err != nil {
 			return fmt.Errorf("--demo: no bundled demo data embedded (build with `make build-serve`): %w", err)
 		}
-		mux = newDemoMux()
+		mux, agentEnabled = newDemoMux()
 		cbomPath, roadmapPath = "(embedded demo)", "(embedded demo)"
 	} else {
 		// REAL mode (default): resolve the customer's CBOM + roadmap from --dir up
@@ -153,7 +161,7 @@ func runServe(cmd *cobra.Command, f serveFlags) error {
 		// PQCC workbook, HTML report, roadmaps, coverage). Missing kinds are
 		// omitted; the manifest + per-artifact routes are built from this.
 		arts = findArtifacts(f.dir)
-		mux = newServeMux(cbomPath, roadmapPath, arts)
+		mux, agentEnabled = newServeMux(cbomPath, roadmapPath, arts)
 	}
 
 	// Bind explicitly to a loopback listener so the OS assigns an ephemeral port
@@ -210,6 +218,13 @@ func runServe(cmd *cobra.Command, f serveFlags) error {
 			}
 		}
 	}
+	if agentEnabled {
+		fmt.Fprintln(cmd.OutOrStdout(), "  AI Agent: enabled (Gemini) — Ask AI in the dashboard's top nav")
+	} else if os.Getenv("GEMINI_API_KEY") != "" {
+		fmt.Fprintln(cmd.OutOrStdout(), "  AI Agent: disabled — GEMINI_API_KEY is set but the corpus failed to load (see the warning above)")
+	} else {
+		fmt.Fprintln(cmd.OutOrStdout(), "  AI Agent: disabled — set GEMINI_API_KEY and restart to enable")
+	}
 	fmt.Fprintln(cmd.OutOrStdout(), "  (loopback only — Ctrl-C to stop)")
 
 	// Wrap the mux in the Host-header allowlist (DNS-rebinding defense) and set
@@ -221,8 +236,14 @@ func runServe(cmd *cobra.Command, f serveFlags) error {
 		Handler:           loopbackHostGuard(mux, boundPort),
 		ReadTimeout:       10 * time.Second,
 		ReadHeaderTimeout: 5 * time.Second,
-		WriteTimeout:      30 * time.Second,
-		IdleTimeout:       120 * time.Second,
+		// WriteTimeout must exceed the AI Agent's own request timeout
+		// (internal/agent/handler.go's requestTimeout, 90s — a thinking-capable
+		// model can take multiple tool-call turns to answer) or the server would
+		// itself cut off a legitimate in-flight agent reply. Every other route
+		// (static files) finishes in milliseconds, so this only ever matters for
+		// /api/agent/chat.
+		WriteTimeout: 120 * time.Second,
+		IdleTimeout:  120 * time.Second,
 	}
 	if err := srv.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		return err
@@ -276,8 +297,11 @@ func loopbackHostGuard(next http.Handler, port int) http.Handler {
 // downloadable artifact set under /artifacts/*, with the embedded SPA (and its
 // deep-link fallback) serving everything else. arts is the set found in --dir
 // (see findArtifacts); each is exposed at its fixed route as an attachment
-// download, and all are listed at /artifacts/manifest.json for the UI.
-func newServeMux(cbomPath, roadmapPath string, arts []artifact) *http.ServeMux {
+// download, and all are listed at /artifacts/manifest.json for the UI. The
+// returned bool reports whether the AI Agent routes actually came up live
+// (see mountAgentRoutes) — the caller uses it for the startup banner, since
+// GEMINI_API_KEY being set is necessary but not sufficient.
+func newServeMux(cbomPath, roadmapPath string, arts []artifact) (*http.ServeMux, bool) {
 	mux := http.NewServeMux()
 
 	// Synthesized runtime config: empty apiBase + mockMode=true sends the
@@ -307,7 +331,9 @@ func newServeMux(cbomPath, roadmapPath string, arts []artifact) *http.ServeMux {
 	// deep links (e.g. /roadmap, /accounts/123) resolve to the app shell.
 	mux.Handle("/", spaHandler())
 
-	return mux
+	agentEnabled := mountAgentRoutesFromDisk(mux, cbomPath, roadmapPath)
+
+	return mux, agentEnabled
 }
 
 // newDemoMux serves the bundled SYNTHETIC demo data embedded in the binary
@@ -317,7 +343,7 @@ func newServeMux(cbomPath, roadmapPath string, arts []artifact) *http.ServeMux {
 // same way; the /mock/*.json + SPA assets all come from the embedded webdist via
 // spaHandler, so there is exactly one bundled data set and it can never be
 // confused with a real scan (its CBOM is mode="mock").
-func newDemoMux() *http.ServeMux {
+func newDemoMux() (*http.ServeMux, bool) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/config.json", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -333,7 +359,66 @@ func newDemoMux() *http.ServeMux {
 	// straight from the embedded webdist by spaHandler (vite copied public/mock
 	// into the bundle), so no on-disk file is read in demo mode.
 	mux.Handle("/", spaHandler())
-	return mux
+
+	agentEnabled := mountAgentRoutesFromEmbeddedFS(mux)
+
+	return mux, agentEnabled
+}
+
+// mountAgentRoutesFromDisk mounts the AI Agent's /api/agent/* routes for the
+// REAL-scan path (newServeMux), loading its corpus from the same on-disk
+// cbomPath/roadmapPath already resolved for the dashboard's static /mock/
+// routes. See mountAgentRoutes for the shared enable/disable logic.
+func mountAgentRoutesFromDisk(mux *http.ServeMux, cbomPath, roadmapPath string) bool {
+	return mountAgentRoutes(mux, func() (*agent.Corpus, error) {
+		return agent.LoadCorpus(cbomPath, roadmapPath)
+	})
+}
+
+// mountAgentRoutesFromEmbeddedFS mounts the AI Agent's /api/agent/* routes for
+// the --demo path (newDemoMux), loading its corpus from the embedded webdist
+// bundle (there is no on-disk scan in demo mode — see newDemoMux).
+func mountAgentRoutesFromEmbeddedFS(mux *http.ServeMux) bool {
+	return mountAgentRoutes(mux, func() (*agent.Corpus, error) {
+		return agent.LoadCorpusFS(webDist, "webdist/mock/org-cbom.json", "webdist/mock/roadmap.json")
+	})
+}
+
+// mountAgentRoutes wires the AI Agent chat endpoints onto mux and reports
+// whether they came up live. The agent is OPT-IN and fails soft: with no
+// GEMINI_API_KEY set, or if loadCorpus fails, /api/agent/* answers a clear
+// "not configured"/disabled response instead of either blocking `cryptamap
+// serve` from starting or silently 404ing — the rest of the dashboard must
+// keep working either way. The mounted routes sit behind the same
+// loopbackHostGuard wrapper as every other route (applied once, around the
+// whole mux, in runServe) — no separate security handling needed here, and no
+// new secret ever reaches the browser: GEMINI_API_KEY is read here,
+// server-side, and used only in the outbound call internal/agent/gemini.go
+// makes to Google.
+//
+// NewChatHandler is given the read-only *agent.Corpus, not a pre-built
+// executor: it constructs a fresh agent.ToolExecutor per request internally,
+// since ToolExecutor carries per-turn mutable state (the pending UI action)
+// that must never be shared across cryptamap serve's concurrently-handled
+// requests.
+func mountAgentRoutes(mux *http.ServeMux, loadCorpus func() (*agent.Corpus, error)) bool {
+	key := os.Getenv("GEMINI_API_KEY")
+	if key == "" {
+		mux.HandleFunc("/api/agent/chat", agent.DisabledHandler)
+		mux.HandleFunc("/api/agent/status", agent.StatusHandler(false))
+		return false
+	}
+	corpus, err := loadCorpus()
+	if err != nil {
+		log.Printf("cryptamap: AI agent disabled — failed to load corpus: %v", err)
+		mux.HandleFunc("/api/agent/chat", agent.DisabledHandler)
+		mux.HandleFunc("/api/agent/status", agent.StatusHandler(false))
+		return false
+	}
+	provider := agent.NewGeminiProvider(key)
+	mux.HandleFunc("/api/agent/chat", agent.NewChatHandler(provider, corpus))
+	mux.HandleFunc("/api/agent/status", agent.StatusHandler(true))
+	return true
 }
 
 // fileServer serves a single fixed file (Content-Type + caching handled by
