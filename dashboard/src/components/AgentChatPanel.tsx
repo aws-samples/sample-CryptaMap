@@ -5,6 +5,7 @@
 // small fixed-position overlay, rendered as a sibling of <AppLayout> in
 // AppShell.tsx, keeps it fully independent of the page underneath.
 import { useEffect, useRef, useState } from 'react';
+import type { ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
 import Box from '@cloudscape-design/components/box';
 import Button from '@cloudscape-design/components/button';
@@ -37,6 +38,49 @@ const EXAMPLE_PROMPTS = [
   'Which assets use RSA?',
   'Take me to the migration roadmap for KMS.',
 ];
+
+// Minimal, dependency-free **bold** renderer for the model's markdown-flavored
+// replies (Gemini reliably emits **word** for emphasis). Splits on the
+// delimiter and builds plain React elements — no HTML parsing, so there is no
+// injection surface — rather than pulling in a full markdown library for one
+// inline style.
+function renderInlineMarkdown(text: string): ReactNode[] {
+  return text.split(/(\*\*[^*]+\*\*)/g).map((part, i) =>
+    part.startsWith('**') && part.endsWith('**') && part.length > 4 ? (
+      <strong key={i}>{part.slice(2, -2)}</strong>
+    ) : (
+      <span key={i}>{part}</span>
+    ),
+  );
+}
+
+// One chat bubble. Role is communicated entirely through alignment + color
+// (right/blue for the user, left/neutral for the agent) rather than a "You:"/
+// "Agent:" text prefix, matching a conventional chat-app look.
+function MessageBubble({ role, text }: { role: 'user' | 'assistant'; text: string }) {
+  const isUser = role === 'user';
+  return (
+    <div style={{ display: 'flex', justifyContent: isUser ? 'flex-end' : 'flex-start' }}>
+      <div
+        style={{
+          maxWidth: '85%',
+          padding: '8px 14px',
+          borderRadius: 16,
+          borderBottomRightRadius: isUser ? 4 : 16,
+          borderBottomLeftRadius: isUser ? 16 : 4,
+          background: isUser ? '#0972d3' : '#f2f3f3',
+          color: isUser ? '#ffffff' : '#0f141a',
+          fontSize: 14,
+          lineHeight: '20px',
+          wordBreak: 'break-word',
+          whiteSpace: 'pre-wrap',
+        }}
+      >
+        {renderInlineMarkdown(text)}
+      </div>
+    </div>
+  );
+}
 
 export default function AgentChatPanel({ open, onClose, agentEnabled }: Props) {
   const navigate = useNavigate();
@@ -88,11 +132,12 @@ export default function AgentChatPanel({ open, onClose, agentEnabled }: Props) {
         maxWidth: 'calc(100vw - 48px)',
         maxHeight: '70vh',
         zIndex: 2000,
-        boxShadow: '0 4px 24px rgba(0, 0, 0, 0.3)',
-        borderRadius: 8,
+        boxShadow: '0 8px 32px rgba(0, 0, 0, 0.28)',
+        borderRadius: 16,
       }}
     >
       <Container
+        disableContentPaddings
         header={
           <Header
             variant="h3"
@@ -100,18 +145,38 @@ export default function AgentChatPanel({ open, onClose, agentEnabled }: Props) {
               <Button iconName="close" variant="icon" ariaLabel="Close AI Agent" onClick={onClose} />
             }
           >
-            Ask AI
+            <SpaceBetween size="xs" direction="horizontal">
+              <span
+                aria-hidden="true"
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  width: 24,
+                  height: 24,
+                  borderRadius: '50%',
+                  background: 'linear-gradient(135deg, #0972d3, #0aa196)',
+                  color: '#fff',
+                  fontSize: 13,
+                }}
+              >
+                ✦
+              </span>
+              <span>Ask AI</span>
+            </SpaceBetween>
           </Header>
         }
       >
-        <SpaceBetween size="s">
+        <div style={{ display: 'flex', flexDirection: 'column', maxHeight: 'calc(70vh - 52px)' }}>
           {!agentEnabled && (
-            <Alert type="warning" header="AI Agent not configured">
-              Set the <code>GEMINI_API_KEY</code> environment variable and restart <code>cryptamap serve</code> to
-              enable it.
-            </Alert>
+            <Box padding={{ horizontal: 'l', top: 's' }}>
+              <Alert type="warning" header="AI Agent not configured">
+                Set the <code>GEMINI_API_KEY</code> environment variable and restart{' '}
+                <code>cryptamap serve</code> to enable it.
+              </Alert>
+            </Box>
           )}
-          <div style={{ maxHeight: '42vh', overflowY: 'auto' }}>
+          <div style={{ overflowY: 'auto', padding: '12px 16px', flexGrow: 1 }}>
             <SpaceBetween size="s">
               {messages.length === 0 && (
                 <Box color="text-body-secondary" fontSize="body-s">
@@ -128,17 +193,27 @@ export default function AgentChatPanel({ open, onClose, agentEnabled }: Props) {
                 </Box>
               )}
               {messages.map((m, i) => (
-                <Box key={i} padding={{ vertical: 'xs' }}>
-                  <Box variant="span" fontWeight="bold">
-                    {m.role === 'user' ? 'You' : 'Agent'}:
-                  </Box>{' '}
-                  <Box variant="span">{m.text}</Box>
-                </Box>
+                <MessageBubble key={i} role={m.role} text={m.text} />
               ))}
               {busy && (
-                <Box padding={{ vertical: 'xs' }}>
-                  <Spinner size="normal" /> Thinking…
-                </Box>
+                <div style={{ display: 'flex', justifyContent: 'flex-start' }}>
+                  <div
+                    style={{
+                      padding: '8px 14px',
+                      borderRadius: 16,
+                      borderBottomLeftRadius: 4,
+                      background: '#f2f3f3',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 8,
+                    }}
+                  >
+                    <Spinner size="normal" />
+                    <Box variant="span" color="text-body-secondary" fontSize="body-s">
+                      Thinking…
+                    </Box>
+                  </div>
+                </div>
               )}
               {error && (
                 <Alert type="error" header="Agent unavailable">
@@ -148,7 +223,15 @@ export default function AgentChatPanel({ open, onClose, agentEnabled }: Props) {
               <div ref={bottomRef} />
             </SpaceBetween>
           </div>
-          <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end' }}>
+          <div
+            style={{
+              display: 'flex',
+              gap: 8,
+              alignItems: 'flex-end',
+              padding: '10px 16px 14px',
+              borderTop: '1px solid #e9ebed',
+            }}
+          >
             <div style={{ flexGrow: 1 }}>
               <Textarea
                 value={input}
@@ -160,13 +243,13 @@ export default function AgentChatPanel({ open, onClose, agentEnabled }: Props) {
             </div>
             <Button
               variant="primary"
+              iconName="send"
+              ariaLabel="Send"
               onClick={() => send(input)}
               disabled={busy || !agentEnabled || !input.trim()}
-            >
-              Send
-            </Button>
+            />
           </div>
-        </SpaceBetween>
+        </div>
       </Container>
     </div>
   );
