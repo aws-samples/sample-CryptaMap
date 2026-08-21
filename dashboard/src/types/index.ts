@@ -39,6 +39,21 @@ export type {
 // `findings: Finding[]` are now the generated typed shapes (was `any[]`).
 export type { ScanResult } from './generated';
 
+// --- AI Agent wire shapes (internal/agent/action.go) ------------------------
+// Aliased to the app-facing names already used in services/agentApi.ts and
+// lib/agentActions.ts, so this backend contract is generated like everything
+// else rather than hand-mirrored — see cmd/gen-ts/main.go.
+export type {
+  AgentActionType,
+  AgentFilterOperator,
+  AgentChatRole,
+  AgentAction,
+  AgentPropertyFilterQuery as PropertyFilterQuery,
+  AgentPropertyFilterToken as PropertyFilterToken,
+  AgentChatTurn as ChatTurn,
+  AgentChatResponse,
+} from './generated';
+
 // --- CycloneDX CBOM aliases ------------------------------------------------
 // The dashboard refers to the CycloneDX wire shapes as CBOM / CBOMComponent /
 // CBOMProperty; the Go source-of-truth structs are CDXBOM / CDXComponent /

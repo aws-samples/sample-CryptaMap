@@ -41,6 +41,15 @@ export type SymmetricStrength = 'quantum-safe' | 'adequate-review' | 'weak-repla
 /** ComplianceMapping.status vocabulary (pkg/models/finding.go ComplianceMapping). */
 export type ComplianceStatus = 'compliant' | 'non-compliant' | 'partial' | 'informational';
 
+/** AI Agent in-app action kind (internal/agent/action.go Action.Type). */
+export type AgentActionType = 'filter_assets' | 'select_asset' | 'view_roadmap';
+
+/** PropertyFilter token operator the AI Agent may propose (internal/agent/action.go PropertyFilterToken.Operator). */
+export type AgentFilterOperator = '=' | '!=';
+
+/** Chat turn role (internal/agent/handler.go ChatTurn.Role). */
+export type AgentChatRole = 'user' | 'assistant';
+
 /** pkg/models/finding.go MoscaScore. */
 export interface MoscaScore {
   x: number;
@@ -338,5 +347,39 @@ export interface Roadmap {
   byService: ServiceRollup[];
   byAccount: AccountRollup[];
   coverage?: MergeCoverage;
+}
+
+/** internal/agent/action.go PropertyFilterToken. */
+export interface AgentPropertyFilterToken {
+  propertyKey: string;
+  operator: AgentFilterOperator;
+  value: string;
+}
+
+/** internal/agent/action.go PropertyFilterQuery (mirrors AssetsView.tsx's ?q= shape). */
+export interface AgentPropertyFilterQuery {
+  tokens: AgentPropertyFilterToken[];
+  operation: string;
+}
+
+/** internal/agent/action.go Action — the AI Agent's optional in-app action. */
+export interface AgentAction {
+  type: AgentActionType;
+  query?: AgentPropertyFilterQuery;
+  assetBomRef?: string;
+  service?: string;
+}
+
+/** internal/agent/handler.go ChatTurn — one prior turn in a chat request. */
+export interface AgentChatTurn {
+  role: AgentChatRole;
+  text: string;
+}
+
+/** internal/agent/handler.go ChatResponse — the POST /api/agent/chat response body. */
+export interface AgentChatResponse {
+  reply: string;
+  action?: AgentAction;
+  error?: string;
 }
 

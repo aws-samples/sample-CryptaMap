@@ -4,35 +4,21 @@
 // resolves to a typed value or a typed { error } rather than throwing, so a
 // disabled agent, an offline server, or a malformed response degrades the
 // chat panel gracefully instead of crashing it.
+//
+// The request/response wire shapes (ChatTurn, AgentAction, AgentChatResponse,
+// PropertyFilterQuery/Token) are GENERATED from the Go structs that actually
+// produce them (internal/agent/{handler,action}.go via cmd/gen-ts) rather than
+// hand-mirrored here, so this contract can't silently drift from the backend.
 
-export interface ChatTurn {
-  role: 'user' | 'assistant';
-  text: string;
-}
+export type {
+  ChatTurn,
+  AgentAction,
+  AgentChatResponse,
+  PropertyFilterQuery,
+  PropertyFilterToken,
+} from '../types';
 
-export interface PropertyFilterToken {
-  propertyKey: string;
-  operator: string;
-  value: string;
-}
-
-export interface PropertyFilterQuery {
-  tokens: PropertyFilterToken[];
-  operation: 'and' | 'or';
-}
-
-export interface AgentAction {
-  type: 'filter_assets' | 'select_asset' | 'view_roadmap';
-  query?: PropertyFilterQuery;
-  assetBomRef?: string;
-  service?: string;
-}
-
-export interface AgentChatResponse {
-  reply: string;
-  action?: AgentAction;
-  error?: string;
-}
+import type { AgentChatResponse, ChatTurn } from '../types';
 
 export interface AgentStatus {
   enabled: boolean;

@@ -144,6 +144,22 @@ export default function AgentChatPanel({ open, onClose, agentEnabled }: Props) {
             actions={
               <Button iconName="close" variant="icon" ariaLabel="Close AI Agent" onClick={onClose} />
             }
+            // Persistent, honest disclosure — not a one-time dismissible toast —
+            // because it's true every single turn: unlike the rest of this
+            // local-first tool (see README/ARCHITECTURE.md: "no internet-facing
+            // API, data never leaves your org"), the Agent DOES send scan data
+            // (asset/service names, resource IDs, postures — never the raw
+            // GEMINI_API_KEY, which stays server-side) to Google's Gemini API
+            // as tool results so the model can answer. That's a real, deliberate
+            // exception to this project's stated privacy model and the user
+            // should see it every time, not just once.
+            description={
+              agentEnabled ? (
+                <Box fontSize="body-s" color="text-body-secondary">
+                  Sends your questions and scan summaries to Google's Gemini API to answer them.
+                </Box>
+              ) : undefined
+            }
           >
             <SpaceBetween size="xs" direction="horizontal">
               <span

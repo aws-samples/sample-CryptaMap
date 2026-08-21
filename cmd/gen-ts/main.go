@@ -24,6 +24,7 @@ import (
 	"reflect"
 	"strings"
 
+	"github.com/aws-samples/cryptamap/internal/agent"
 	"github.com/aws-samples/cryptamap/internal/output"
 	"github.com/aws-samples/cryptamap/internal/pqc"
 	"github.com/aws-samples/cryptamap/internal/roadmap"
@@ -120,6 +121,24 @@ func main() {
 			goType:  reflect.TypeOf(""), // not a named Go type; literal vocabulary
 			Members: []string{"compliant", "non-compliant", "partial", "informational"},
 		},
+		{
+			Name:    "AgentActionType",
+			Doc:     "AI Agent in-app action kind (internal/agent/action.go Action.Type).",
+			goType:  reflect.TypeOf(""), // plain string field; vocabulary lives in the json-tag comment
+			Members: []string{"filter_assets", "select_asset", "view_roadmap"},
+		},
+		{
+			Name:    "AgentFilterOperator",
+			Doc:     "PropertyFilter token operator the AI Agent may propose (internal/agent/action.go PropertyFilterToken.Operator).",
+			goType:  reflect.TypeOf(""),
+			Members: []string{"=", "!="},
+		},
+		{
+			Name:    "AgentChatRole",
+			Doc:     "Chat turn role (internal/agent/handler.go ChatTurn.Role).",
+			goType:  reflect.TypeOf(""),
+			Members: []string{"user", "assistant"},
+		},
 	}
 
 	// enumTypeOverride maps a Go named string type to the TS enum name to use
@@ -136,6 +155,18 @@ func main() {
 		"pqc.UpgradeEase":           "UpgradeEase",
 		"pqc.Confidence":            "Confidence",
 		"pqc.SymmetricStrength":     "SymmetricStrength",
+		// Struct cross-references: the emitted TS interface names below are
+		// prefixed (AgentAction, not Action) to avoid any future collision with
+		// an unrelated "Action"/"PropertyFilterQuery" concept elsewhere in the
+		// dashboard, so a field referencing the bare Go type name needs
+		// pointing at the prefixed emitted name. enumTypeOverride is a general
+		// named-type override (checked in tsType before the struct/pointer
+		// switch), not enum-specific, so this reuses the same mechanism rather
+		// than adding a parallel one.
+		"agent.Action":              "AgentAction",
+		"agent.PropertyFilterQuery": "AgentPropertyFilterQuery",
+		"agent.PropertyFilterToken": "AgentPropertyFilterToken",
+		"agent.ChatTurn":            "AgentChatTurn",
 	}
 
 	structs := []tsStruct{
@@ -168,6 +199,15 @@ func main() {
 		{Name: "ServiceRollup", Doc: "internal/roadmap/roadmap.go ServiceRollup.", rt: reflect.TypeOf(roadmap.ServiceRollup{})},
 		{Name: "AccountRollup", Doc: "internal/roadmap/roadmap.go AccountRollup.", rt: reflect.TypeOf(roadmap.AccountRollup{})},
 		{Name: "Roadmap", Doc: "internal/roadmap/roadmap.go Roadmap (top-level roadmap envelope).", rt: reflect.TypeOf(roadmap.Roadmap{})},
+		// internal/agent — AI Agent chat wire shapes. Generated so
+		// dashboard/src/lib/agentActions.ts's action-dispatch contract can never
+		// silently drift from the Go side that actually produces it (previously
+		// hand-mirrored in dashboard/src/services/agentApi.ts).
+		{Name: "AgentPropertyFilterToken", Doc: "internal/agent/action.go PropertyFilterToken.", rt: reflect.TypeOf(agent.PropertyFilterToken{})},
+		{Name: "AgentPropertyFilterQuery", Doc: "internal/agent/action.go PropertyFilterQuery (mirrors AssetsView.tsx's ?q= shape).", rt: reflect.TypeOf(agent.PropertyFilterQuery{})},
+		{Name: "AgentAction", Doc: "internal/agent/action.go Action — the AI Agent's optional in-app action.", rt: reflect.TypeOf(agent.Action{})},
+		{Name: "AgentChatTurn", Doc: "internal/agent/handler.go ChatTurn — one prior turn in a chat request.", rt: reflect.TypeOf(agent.ChatTurn{})},
+		{Name: "AgentChatResponse", Doc: "internal/agent/handler.go ChatResponse — the POST /api/agent/chat response body.", rt: reflect.TypeOf(agent.ChatResponse{})},
 	}
 
 	// fieldTypeOverride narrows specific struct fields whose Go type is a plain
@@ -175,7 +215,10 @@ func main() {
 	// "GoStructName.jsonKey". This keeps the union authoritative + generated
 	// rather than hand-edited downstream.
 	fieldTypeOverride := map[string]string{
-		"ComplianceMapping.status": "ComplianceStatus",
+		"ComplianceMapping.status":     "ComplianceStatus",
+		"Action.type":                  "AgentActionType",
+		"PropertyFilterToken.operator": "AgentFilterOperator",
+		"ChatTurn.role":                "AgentChatRole",
 	}
 
 	g := &gen{enumTypeOverride: enumTypeOverride, fieldTypeOverride: fieldTypeOverride}

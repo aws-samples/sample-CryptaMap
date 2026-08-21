@@ -13,11 +13,18 @@ import (
 
 const (
 	// defaultGeminiModel is a stable alias for the latest free-tier-eligible
-	// Gemini Flash model, so this adapter does not need a code change when
-	// Google ships a new Flash generation. Override with GEMINI_MODEL if a
+	// Gemini Flash-Lite model, so this adapter does not need a code change
+	// when Google ships a new Flash-Lite generation. Chosen over the plain
+	// "gemini-flash-latest" alias after live testing: the heavier
+	// thinking-capable Flash models (flash-latest and pinned 3.x releases)
+	// hit real free-tier 503 "high demand" responses and, on newer releases,
+	// a very tight daily request quota (as low as 20/day observed), while
+	// Flash-Lite answered the same queries correctly in 1-3s with no rate
+	// limiting during equivalent testing. Override with GEMINI_MODEL if a
 	// pinned model name is preferred (e.g. the alias is unavailable for a
-	// given account/region).
-	defaultGeminiModel = "gemini-flash-latest"
+	// given account/region) or a heavier model's reasoning is worth the
+	// latency/quota tradeoff for a specific deployment.
+	defaultGeminiModel = "gemini-flash-lite-latest"
 	geminiAPIBase      = "https://generativelanguage.googleapis.com/v1beta/models"
 )
 
